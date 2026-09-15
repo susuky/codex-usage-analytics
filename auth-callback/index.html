@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>開啟 Codex 用量分析</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f151a;color:#edf3f1;font-family:system-ui,"Microsoft JhengHei",sans-serif}.panel{width:min(440px,calc(100% - 40px));padding:34px;border:1px solid #2b343b;border-radius:12px;background:#11181d;text-align:center}.mark{width:54px;height:54px;margin:0 auto 18px;display:grid;place-items:center;border:1px solid #55c9aa;border-radius:10px;color:#65dfbf;font-size:26px}h1{font-size:22px}p{color:#8c999b;line-height:1.6}button{min-height:42px;padding:0 18px;border:1px solid #4db99d;border-radius:7px;background:#65dfbf;color:#07130f;font-weight:650;cursor:pointer}.error{color:#f1a198}</style></head>
+<body><main class="panel"><div class="mark">↗</div><h1>驗證完成</h1><p>按下按鈕回到 Codex 用量分析。這個手動步驟可避免郵件掃描器提前消耗一次性登入連結。</p><button id="open">驗證並開啟 App</button><p id="error" class="error" hidden>登入連結缺少驗證碼，請回到 App 重新寄送。</p></main>
+<script>const params=new URLSearchParams(location.search);const code=params.get('code');const flow=params.get('sb_flow_id');const button=document.getElementById('open');if(!code){button.disabled=true;document.getElementById('error').hidden=false}else{button.addEventListener('click',()=>{const q=new URLSearchParams({code});if(flow)q.set('sb_flow_id',flow);location.href=`codex-usage://auth/callback?${q}`})}</script></body>
+</html>

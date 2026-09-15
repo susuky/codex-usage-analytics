@@ -1,0 +1,29 @@
+[package]
+name = "codex-usage-analytics"
+version = "0.3.15"
+description = "Local-first Codex token usage analytics"
+authors = ["Codex Usage Analytics contributors"]
+edition = "2021"
+
+[lib]
+name = "codex_usage_analytics_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-deep-link = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.37", features = ["bundled", "chrono"] }
+walkdir = "2"
+dirs = "6"
+tar = "0.4"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+thiserror = "2"
+base64 = "0.22"
+flate2 = "1"
+sha2 = "0.10"
