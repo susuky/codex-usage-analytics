@@ -1,6 +1,6 @@
 import { ArrowLeft, BrainCircuit, Coins, Database, Download, Gauge, Upload, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { getSessionDetail } from "../lib/api";
 import { cacheRate, formatCost, formatDateTime, formatInteger, formatSessionCost, formatTokens, shortId } from "../lib/format";
@@ -9,6 +9,9 @@ import styles from "../components/Dashboard.module.css";
 
 export function SessionDetailPage() {
   const { sourceId = "", sessionId = "" } = useParams();
+  const location = useLocation();
+  const requestedReturn = location.state?.returnTo;
+  const returnTo = typeof requestedReturn === "string" && (requestedReturn === "/sessions" || requestedReturn.startsWith("/sessions?")) ? requestedReturn : "/sessions";
   const [session, setSession] = useState<SessionAggregate | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -24,8 +27,9 @@ export function SessionDetailPage() {
       return { turn: turn.ordinal, total, input, output, reasoning };
     });
   }, [session]);
-  if (error) return <div className={styles.error}>{error}</div>;
-  if (!session) return <div className="page-loading">載入 Session 明細…</div>;
+  const heading = <header className="detail-header"><div><h1>Session 明細</h1><Link to={returnTo}><ArrowLeft size={16} aria-hidden="true" />返回 Sessions</Link></div>{session ? <code>{shortId(session.sessionId)}</code> : null}</header>;
+  if (error) return <div className={styles.page}>{heading}<div className={styles.empty}><h2>無法載入這段紀錄</h2><p role="alert">請返回列表再試一次，或重新掃描資料來源。</p><details className={styles.errorDetails}><summary>查看錯誤詳情</summary><p>{error}</p></details></div></div>;
+  if (!session) return <div className={styles.page}>{heading}<div className="page-loading" role="status">正在載入 Session 明細…</div></div>;
   const fastRequests = session.turns?.filter((turn) => turn.serviceTier === "priority").length ?? 0;
   const metricItems = [
     { Icon: Database, label: "總 Tokens", value: formatInteger(session.tokens.totalTokens) },
@@ -43,7 +47,7 @@ export function SessionDetailPage() {
     },
   ];
   return <div className={`${styles.page} detail-page`}>
-    <header className="detail-header"><div><h1>Session 明細</h1><Link to="/sessions"><ArrowLeft size={16} />返回 Sessions</Link></div><code>{shortId(session.sessionId)}</code></header>
+    {heading}
     <div className={styles.content}>
       <section className="metadata-strip"><div><span>模型</span><strong>{session.model}</strong></div><div><span>專案</span><strong>{session.project}</strong></div><div><span>開始時間</span><strong>{formatDateTime(session.startedAt)}</strong></div><div><span>最後活動</span><strong>{formatDateTime(session.endedAt)}</strong></div><div><span>資料來源</span><strong>{session.sourceName}</strong></div></section>
       <section className="detail-metrics">{metricItems.map(({ Icon, label, value, hint }) => <div key={label}><Icon size={20} /><span>{label}</span><strong>{value}</strong>{hint ? <small>{hint}</small> : null}</div>)}</section>

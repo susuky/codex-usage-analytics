@@ -1,4 +1,5 @@
 import type { OverviewData, SessionAggregate, TokenBreakdown, TurnUsage, UsageSource } from "../types";
+import { localDateKey } from "./daily";
 
 const baseDate = new Date();
 baseDate.setHours(9, 21, 0, 0);
@@ -93,7 +94,7 @@ export const demoSources: UsageSource[] = [
 export function buildDemoOverview(): OverviewData {
   const map = new Map<string, { date: string; uncachedInput: number; cachedInput: number; cacheWriteInput: number; output: number; unclassified: number; estimateMicrousd: number; sessions: number }>();
   for (const session of demoSessions) {
-    const date = session.startedAt.slice(0, 10);
+    const date = localDateKey(new Date(session.startedAt));
     const item = map.get(date) ?? { date, uncachedInput: 0, cachedInput: 0, cacheWriteInput: 0, output: 0, unclassified: 0, estimateMicrousd: 0, sessions: 0 };
     item.cachedInput += session.tokens.cachedInputTokens;
     item.cacheWriteInput += session.tokens.cacheWriteInputTokens;
@@ -145,7 +146,7 @@ export function buildDemoOverview(): OverviewData {
     };
   });
   return {
-    todayTokens: daily.filter((day) => day.date === new Date().toISOString().slice(0,10)).reduce((sum, day) => sum + day.uncachedInput + day.cachedInput + day.cacheWriteInput + day.output + day.unclassified, 0),
+    todayTokens: daily.filter((day) => day.date === localDateKey(new Date())).reduce((sum, day) => sum + day.uncachedInput + day.cachedInput + day.cacheWriteInput + day.output + day.unclassified, 0),
     sessions: demoSessions,
     daily,
     models: modelUsage,

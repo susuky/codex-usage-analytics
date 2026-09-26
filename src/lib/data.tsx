@@ -8,6 +8,7 @@ interface DataContextValue {
   setFilter: (next: UsageFilter) => void;
   loading: boolean;
   scanning: boolean;
+  pollMinutes: number;
   error: string | null;
   refresh: (forceFull?: boolean) => Promise<void>;
   reload: () => Promise<void>;
@@ -94,7 +95,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     return () => window.clearInterval(timer);
   }, [scanning]);
 
-  const value = useMemo(() => ({ data, filter, setFilter, loading, scanning, error: scanError ?? error, refresh, reload: load }), [data, filter, setFilter, loading, scanning, error, scanError, refresh, load]);
+  const value = useMemo(() => ({ data, filter, setFilter, loading, scanning, pollMinutes, error: scanError ?? error, refresh, reload: load }), [data, filter, setFilter, loading, scanning, pollMinutes, error, scanError, refresh, load]);
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
 }
 

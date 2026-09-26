@@ -14,7 +14,7 @@ export function ModelDistribution({ models, total }: { models: OverviewData["mod
     {total > 0 ? <ol className={styles.modelRanking}>{(expanded ? ranked : ranked.slice(0, 6)).map((model, index) => {
       const percent = model.tokens.totalTokens / total * 100;
       return <li key={model.model}>
-        <div className={styles.modelRow}><span className={styles.rankNumber}>{String(index + 1).padStart(2, "0")}</span><span className={styles.modelName}>{model.model}</span><strong>{percent > 0 && percent < .1 ? "<0.1" : percent.toFixed(1)}%</strong></div>
+        <div className={styles.modelRow}><span className={styles.rankNumber}>{String(index + 1).padStart(2, "0")}</span><Link className={styles.modelName} to={`/sessions?model=${encodeURIComponent(model.model)}`} aria-label={`查看 ${model.model} 的 Sessions`}>{model.model}</Link><strong>{percent > 0 && percent < .1 ? "<0.1" : percent.toFixed(1)}%</strong></div>
         <div className={styles.modelTrack} aria-hidden="true"><span style={{ width: `${Math.min(100, percent)}%` }} /></div>
         <span className={styles.modelTokens}>{formatTokens(model.tokens.totalTokens)} Tokens</span>
       </li>;

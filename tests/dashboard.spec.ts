@@ -5,7 +5,7 @@ test("dashboard navigation and session drill-down work", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "用量總覽" })).toBeVisible();
   await expect(page.getByText("API 等值估算").first()).toBeVisible();
 
-  await page.getByRole("link", { name: "Sessions" }).click();
+  await page.getByRole("link", { name: "Sessions", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Sessions", exact: true })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "最後活動" })).toBeVisible();
   await page.locator("tbody a").first().click();

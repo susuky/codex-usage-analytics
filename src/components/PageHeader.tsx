@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertCircle, CalendarDays, CheckCircle2, ChevronDown, RefreshCw, X } from "lucide-react";
+import { Link } from "react-router-dom";
 import { useUsageData } from "../lib/data";
 import { localDateKey } from "../lib/daily";
 import styles from "./Dashboard.module.css";
 
 const datePresets = [
+  { days: 1, label: "今天" },
   { days: 7, label: "最近 7 天" },
   { days: 30, label: "最近 30 天" },
   { days: 90, label: "最近 90 天" },
@@ -31,7 +33,7 @@ function customRangeLabel(startDate?: string, endDate?: string) {
 }
 
 export function PageHeader({ title, subtitle, showDateFilter = true }: { title: string; subtitle?: string; showDateFilter?: boolean }) {
-  const { data, filter, setFilter, scanning, refresh, error } = useUsageData();
+  const { data, filter, setFilter, loading, scanning, refresh, error } = useUsageData();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [draftStart, setDraftStart] = useState("");
   const [draftEnd, setDraftEnd] = useState("");
@@ -40,6 +42,7 @@ export function PageHeader({ title, subtitle, showDateFilter = true }: { title: 
   const returnFocusRef = useRef<HTMLButtonElement | HTMLSelectElement | null>(null);
   const closePicker = () => { setPickerOpen(false); returnFocusRef.current?.focus(); };
   const synced = !error && Boolean(data?.sources.some((source) => source.enabled)) && data?.sources.filter((source) => source.enabled).every((source) => !source.stale && !source.lastError && source.lastScannedAt);
+  const statusText = scanning ? "掃描中…" : loading && !data ? "載入中…" : error ? "需要注意" : !data?.sources.some(source => source.enabled) ? "未啟用來源" : synced ? "資料已更新" : "來源待更新";
   const today = localDateKey(new Date());
   const customRange = Boolean(filter.startDate && filter.endDate);
   const invalidRange = Boolean(draftStart && draftEnd && draftStart > draftEnd);
@@ -88,7 +91,14 @@ export function PageHeader({ title, subtitle, showDateFilter = true }: { title: 
 
   return (
     <header className={styles.pageHeader}>
-      <div><h1>{title}</h1>{subtitle ? <p>{subtitle}</p> : null}{error ? <p role="alert" className="state-error">{error}</p> : null}</div>
+      <div>
+        <h1>{title}</h1>
+        {subtitle ? <p>{subtitle}</p> : null}
+        {error ? <div role="alert">
+          <p className="state-error">更新未完成。請重試，或查看資料來源的連線狀態。</p>
+          <details className={styles.errorDetails}><summary>查看錯誤詳情</summary><p>{error}</p></details>
+        </div> : null}
+      </div>
       <div className={styles.headerActions}>
         {showDateFilter ? <div className={styles.dateControl} ref={pickerRef}>
           <button
@@ -143,9 +153,11 @@ export function PageHeader({ title, subtitle, showDateFilter = true }: { title: 
             </form>
           ) : null}
         </div> : null}
-        <span className={`${styles.syncState} ${scanning ? styles.scanning : synced ? styles.ok : styles.warn}`} role="status">
-          {scanning ? <RefreshCw className={styles.spin} size={16} /> : synced ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
-          {scanning ? "掃描中…" : synced ? "資料已更新" : "需要注意"}
+        <span role="status" aria-atomic="true">
+          <Link to="/sync" aria-label={`查看來源狀態：${statusText}`} className={`${styles.syncState} ${scanning ? styles.scanning : synced ? styles.ok : styles.warn}`}>
+            {scanning ? <RefreshCw className={styles.spin} size={16} aria-hidden="true" /> : synced ? <CheckCircle2 size={16} aria-hidden="true" /> : <AlertCircle size={16} aria-hidden="true" />}
+            {statusText}
+          </Link>
         </span>
         <button className={styles.iconButton} aria-label={scanning ? "正在掃描" : "重新掃描"} title={scanning ? "正在掃描所有啟用來源" : "重新掃描本機與遠端來源"} disabled={scanning} onClick={() => void refresh(true)}><RefreshCw size={18} /></button>
       </div>

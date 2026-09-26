@@ -2,8 +2,9 @@ import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { OverviewPage } from "./pages/OverviewPage";
-import { SessionsPage } from "./pages/SessionsPage";
-import { SessionDetailPage } from "./pages/SessionDetailPage";
+
+const SessionsPage = lazy(() => import("./pages/SessionsPage").then(module => ({ default: module.SessionsPage })));
+const SessionDetailPage = lazy(() => import("./pages/SessionDetailPage").then(module => ({ default: module.SessionDetailPage })));
 
 const TrendsPage = lazy(() => import("./pages/TrendsPage"));
 const ModelsPage = lazy(() => import("./pages/ModelsPage"));

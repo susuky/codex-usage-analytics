@@ -5,6 +5,7 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { ModelDistribution } from "../components/ModelDistribution";
 import { PageHeader } from "../components/PageHeader";
 import { SessionTable } from "../components/SessionTable";
+import { UsageHealth } from "../components/UsageHealth";
 import { useUsageData } from "../lib/data";
 import { fillDailyDateRange, fillDailyRange } from "../lib/daily";
 import { cacheRate, formatCost, formatDate, formatInteger, formatTokens } from "../lib/format";
@@ -22,7 +23,7 @@ function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: 
 }
 
 export function OverviewPage() {
-  const { data, filter, loading, error } = useUsageData();
+  const { data, filter, loading, scanning, error, reload } = useUsageData();
   const [showDailyTable, setShowDailyTable] = useState(false);
   const chartData = useMemo(
     () => filter.startDate && filter.endDate
@@ -30,8 +31,8 @@ export function OverviewPage() {
       : fillDailyRange(data?.daily ?? [], filter.days),
     [data?.daily, filter.days, filter.startDate, filter.endDate]
   );
-  if (loading && !data) return <div className={styles.page}><PageHeader title="用量總覽" /><div className="page-loading">正在整理 Codex session…</div></div>;
-  if (error && !data) return <div className={styles.page}><PageHeader title="用量總覽" /><div className={styles.error}>{error}</div></div>;
+  if (loading && !data) return <div className={styles.page}><PageHeader title="用量總覽" /><div className="page-loading" role="status">正在載入使用紀錄…</div></div>;
+  if (error && !data) return <div className={styles.page}><PageHeader title="用量總覽" /><div className={styles.empty}><h2>暫時無法顯示用量</h2><p>請重新載入；既有統計不會因此刪除。</p><button className="secondary-button" onClick={() => void reload()}>重新載入</button></div></div>;
   if (!data) return null;
   const barMinimum = (key: "uncachedInput" | "cachedInput" | "cacheWriteInput" | "output" | "unclassified") => (_value: number | null | undefined, index: number) => (chartData[index]?.[key] ?? 0) > 0 ? 3 : 0;
   const rate = cacheRate(data.totals);
@@ -49,6 +50,7 @@ export function OverviewPage() {
         <Metric icon={MessagesSquare} label="Sessions" value={formatInteger(data.sessions.length)} hint="所選區間內的對話" />
       </section>
       <div className={styles.content}>
+        <UsageHealth data={data} scanning={scanning} />
         <div className={styles.charts}>
           <section className={styles.chartPanel}>
             <div className={styles.sectionHeading}><h2 className={styles.panelTitle}>每日 Token 趨勢</h2><Link to="/trends" className={styles.textLink}>查看趨勢<ArrowUpRight size={14} /></Link></div>
