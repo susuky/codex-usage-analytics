@@ -325,7 +325,7 @@ dependencies = [
 
 [[package]]
 name = "codex-usage-analytics"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "base64 0.22.1",
  "chrono",
