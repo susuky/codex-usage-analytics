@@ -1,0 +1,7 @@
+# Keep cross-platform source files consistent and Windows launchers runnable.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.sh text eol=lf
+*.png binary
+*.ico binary
+*.icns binary

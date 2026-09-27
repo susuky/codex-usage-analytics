@@ -8,10 +8,12 @@ import { chromium, expect } from '@playwright/test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createServer } from 'node:net';
 
-const exe=resolve(process.argv[2] ?? 'outputs/v0.3.12-final/CodexUsageAnalytics.exe');
+const projectRoot=resolve(import.meta.dirname,'..');
+const {version}=JSON.parse(readFileSync(join(projectRoot,'package.json'),'utf8'));
+const exe=resolve(process.argv[2] ?? join(projectRoot,'outputs',`v${version}`,'CodexUsageAnalytics.exe'));
 const pe=readFileSync(exe), optional=pe.readUInt32LE(0x3c)+24;
 if (pe.readUInt16LE(optional+68)!==2) throw new Error('Executable must use the Windows GUI subsystem');
-const root=mkdtempSync(join(tmpdir(),'codex-usage-native-0314-'));
+const root=mkdtempSync(join(tmpdir(),'codex-usage-native-'));
 mkdirSync(join(root,'codex','sessions'),{recursive:true});
 const stamp=new Date().toISOString();
 const log=[{type:'session_meta',timestamp:stamp,payload:{id:'native-smoke',timestamp:stamp,cwd:'C:/PRIVATE/test-project'}},
