@@ -108,6 +108,8 @@ test("settings navigation keeps labeled pricing fields inside the viewport", asy
   await expect(page.getByLabel("日期範圍")).toHaveCount(0);
   await page.getByRole("link", { name: "模型價格" }).click();
   await expect(page.getByRole("heading", { name: "API 等值價格" })).toBeInViewport();
+  await page.getByRole("button", { name: "編輯 gpt-5.6-sol 價格" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
   for (const label of ["gpt-5.6-sol input 價格", "gpt-5.6-sol cached input 價格", "gpt-5.6-sol cache writes 價格", "gpt-5.6-sol Priority 倍率"]) {
     await expect(page.getByLabel(label)).toBeInViewport();
   }

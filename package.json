@@ -1,7 +1,7 @@
 {
   "name": "codex-usage-analytics",
   "private": true,
-  "version": "0.3.16",
+  "version": "0.3.21",
   "type": "module",
   "scripts": {
     "dev": "vite --configLoader runner",

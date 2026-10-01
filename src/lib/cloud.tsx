@@ -181,7 +181,7 @@ export function CloudProvider({ children }: { children: ReactNode }) {
     const { error } = await client.rpc("delete_cloud_usage_v3");
     if (error) throw error;
     const settings = await getSettings();
-    await saveSettings({ ...settings,cloudEnabled:false });
+    await saveSettings({ ...settings,cloudEnabled:false }, settings.pricingRules);
     await saveSyncState(session.user.id,{acknowledged:{},pending:{},lastSyncedAt:null});
     setStatus((current) => ({ ...current,lastSyncedAt:null,pendingRows:0,enabled:false }));
   }, [session]);

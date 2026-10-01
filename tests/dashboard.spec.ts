@@ -83,6 +83,7 @@ test("fast mode is tracked per turn and uses an editable Priority multiplier", a
   await expect(page.getByText(/API 等值已套用 Priority 倍率/)).toBeVisible();
 
   await page.goto("/settings");
+  await page.getByRole("button", { name: "編輯 gpt-5.6-sol 價格" }).click();
   await expect(page.getByLabel("gpt-5.6-sol Priority 倍率")).toHaveValue("2");
 });
 
@@ -94,8 +95,13 @@ test("models show per-model Thinking records and official legacy pricing", async
   await expect(page.getByText(/Thinking 來自每回合的實際設定/)).toBeVisible();
 
   await page.goto("/settings");
+  await page.getByRole("button", { name: "編輯 gpt-5.5 價格" }).click();
   await expect(page.getByLabel("gpt-5.5 input 價格")).toHaveValue("5");
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  await page.getByRole("button", { name: "編輯 gpt-5.4 價格" }).click();
   await expect(page.getByLabel("gpt-5.4 input 價格")).toHaveValue("2.5");
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  await page.getByRole("button", { name: "編輯 gpt-5.3-codex 價格" }).click();
   await expect(page.getByLabel("gpt-5.3-codex input 價格")).toHaveValue("1.75");
 });
 

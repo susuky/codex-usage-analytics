@@ -48,10 +48,10 @@ Windows 打包完成後，可另外執行隔離的原生測試：
 ```sh
 node tests/native-smoke.mjs
 # 也可以指定要測試的成品：
-node tests/native-smoke.mjs outputs/v0.3.16/CodexUsageAnalytics.exe
+node tests/native-smoke.mjs outputs/v0.3.21/CodexUsageAnalytics.exe
 ```
 
-未指定 EXE 時，腳本會從 `package.json` 讀取版本並使用 `outputs/v<版本>/CodexUsageAnalytics.exe`，不固定指向舊版。測試建立暫存資料庫與人工紀錄，關閉 SSH／雲端；不更改日常使用的統計資料。它檢查視窗按鈕、掃描去重、日期、重新計價與 Session 明細，但不等於安裝包、真實遠端或登入流程驗證。
+未指定 EXE 時，腳本會從 `package.json` 讀取版本並使用 `outputs/v<版本>/CodexUsageAnalytics.exe`，不固定指向舊版。測試建立暫存資料庫、視窗狀態與人工紀錄，關閉 SSH／雲端；不更改日常使用的統計資料。它檢查視窗按鈕、掃描去重、日期、重新計價、官方價格下載與 Session 明細，並重新啟動兩次驗證視窗大小、最大化、側欄與日期偏好。此測試需要連線到官方定價網站，不等於安裝包、真實遠端或登入流程驗證。
 
 ## Repo 與本機產物的界線
 

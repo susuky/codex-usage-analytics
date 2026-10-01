@@ -690,8 +690,14 @@ pub fn save_settings(connection: &Connection, settings: &AppSettings) -> Result<
 }
 
 pub fn reprice_all_sessions(connection: &mut Connection, rules: &[PricingRule]) -> Result<(), String> {
+    let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|error| error.to_string())?;
+    reprice_in_transaction(&tx, rules)?;
+    tx.commit().map_err(|error| error.to_string())
+}
+
+pub(crate) fn reprice_in_transaction(tx: &Connection, rules: &[PricingRule]) -> Result<(), String> {
     let turns = {
-        let mut statement = connection.prepare("SELECT source_id,session_id,ordinal,model,service_tier,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens FROM turns").map_err(|error| error.to_string())?;
+        let mut statement = tx.prepare("SELECT source_id,session_id,ordinal,model,service_tier,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens FROM turns").map_err(|error| error.to_string())?;
         let rows = statement.query_map([], |row| Ok((
             row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?,
             TokenBreakdown { input_tokens: row.get(5)?, cached_input_tokens: row.get(6)?, cache_write_input_tokens: row.get(7)?, output_tokens: row.get(8)?, reasoning_output_tokens: row.get(9)?, total_tokens: row.get(10)? }
@@ -699,7 +705,6 @@ pub fn reprice_all_sessions(connection: &mut Connection, rules: &[PricingRule]) 
         rows
     };
     let mut session_costs: HashMap<(String, String), (i64, i64, i64)> = HashMap::new();
-    let tx = connection.transaction().map_err(|error| error.to_string())?;
     for (source_id, session_id, ordinal, model, service_tier, tokens) in turns {
         let estimate = estimate_with_rules_for_tier(&model, &tokens, &service_tier, rules);
         tx.execute("UPDATE turns SET estimate_microusd=?1 WHERE source_id=?2 AND session_id=?3 AND ordinal=?4", params![estimate, source_id, session_id, ordinal]).map_err(|error| error.to_string())?;
@@ -717,5 +722,5 @@ pub fn reprice_all_sessions(connection: &mut Connection, rules: &[PricingRule]) 
         "UPDATE sessions SET estimate_microusd=0 WHERE total_tokens=0 AND NOT EXISTS (SELECT 1 FROM turns WHERE turns.source_id=sessions.source_id AND turns.session_id=sessions.session_id)",
         [],
     ).map_err(|error| error.to_string())?;
-    tx.commit().map_err(|error| error.to_string())
+    Ok(())
 }

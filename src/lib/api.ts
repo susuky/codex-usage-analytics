@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { buildDemoOverview, demoSessions, demoSources } from "./mockData";
 import { localDateKey } from "./daily";
-import type { AppSettings, OverviewData, PricingRule, ScanResult, SessionAggregate, SshSourceConfig, StoredSyncState, UsageFilter, UsageSource } from "../types";
+import type { AppSettings, OverviewData, PricingRule, PricingStatus, PricingUpdateResult, ScanResult, SessionAggregate, SshSourceConfig, StoredSyncState, UsageFilter, UsageSource } from "../types";
 
 const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -67,7 +67,8 @@ const defaultSettings: AppSettings = {
   sshSources: [{ id: "ssh-example-server", name: "example-server", target: "user@example-server", codexHome: "", enabled: true }],
   cloudEnabled: true,
   pollMinutes: 15,
-  pricingRules: defaultPricingRules
+  pricingRules: defaultPricingRules,
+  autoUpdatePricing: true
 };
 
 export async function getSettings(): Promise<AppSettings> {
@@ -82,14 +83,31 @@ export async function getSettings(): Promise<AppSettings> {
   return invoke<AppSettings>("get_settings");
 }
 
-export async function saveSettings(settings: AppSettings): Promise<void> {
+export async function saveSettings(settings: AppSettings, basePricingRules?: PricingRule[]): Promise<void> {
   if (!isTauri()) {
     sessionStorage.setItem("codex-usage-settings", JSON.stringify(settings));
     window.dispatchEvent(new Event("usage-settings-changed"));
     return;
   }
-  await invoke("save_settings", { settings });
+  await invoke("save_settings", { settings, basePricingRules });
   window.dispatchEvent(new Event("usage-settings-changed"));
+}
+
+export async function getPricingStatus(): Promise<PricingStatus> {
+  if (!isTauri()) return { checkedAt: null, updatedAt: null, lastError: null, officialRules: defaultPricingRules };
+  return invoke<PricingStatus>("get_pricing_status");
+}
+
+export async function refreshPricing(force = false): Promise<PricingUpdateResult | null> {
+  if (!isTauri()) {
+    if (force) throw new Error("請在桌面版更新官方價格。");
+    return null;
+  }
+  try {
+    const result = await invoke<PricingUpdateResult>("refresh_pricing", { force });
+    if (result.changed) window.dispatchEvent(new Event("usage-settings-changed"));
+    return result;
+  } finally { window.dispatchEvent(new Event("usage-pricing-updated")); }
 }
 
 export async function openPricingDocs(): Promise<void> {

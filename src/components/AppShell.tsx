@@ -3,6 +3,7 @@ import { NavLink } from "react-router-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Activity, BarChart3, Box, ChartNoAxesCombined, PanelLeftClose, PanelLeftOpen, CircleGauge, Minus, RefreshCw, Settings, Square, TerminalSquare, X } from "lucide-react";
 import styles from "./AppShell.module.css";
+import { loadSidebarCollapsed, saveSidebarCollapsed } from "../lib/preferences";
 
 const navigation = [
   { to: "/", label: "總覽", icon: CircleGauge, end: true },
@@ -34,7 +35,11 @@ function handleTitlebarMouseDown(event: MouseEvent<HTMLElement>) {
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const [collapsed, setCollapsed] = useState(() => window.matchMedia?.("(max-width: 1100px)").matches ?? false);
+  const [collapsed, setCollapsed] = useState(loadSidebarCollapsed);
+  const toggleSidebar = () => {
+    saveSidebarCollapsed(!collapsed);
+    setCollapsed(!collapsed);
+  };
   return (
     <div className={styles.window}>
       <a className={styles.skipLink} href="#main-content">跳至主要內容</a>
@@ -57,7 +62,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               </NavLink>
             ))}
           </nav>
-          <button type="button" className={styles.sidebarBottom} aria-label={collapsed ? "展開側欄" : "收合側欄"} aria-expanded={!collapsed} title={collapsed ? "展開側欄" : "收合側欄"} onClick={() => setCollapsed((value) => !value)}>{collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}<span>收合側欄</span></button>
+          <button type="button" className={styles.sidebarBottom} aria-label={collapsed ? "展開側欄" : "收合側欄"} aria-expanded={!collapsed} title={collapsed ? "展開側欄" : "收合側欄"} onClick={toggleSidebar}>{collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}<span>收合側欄</span></button>
         </aside>
         <main className={styles.main} id="main-content" tabIndex={-1}>{children}</main>
       </div>

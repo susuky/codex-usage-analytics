@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { OverviewPage } from "./pages/OverviewPage";
+import { useAutomaticPricing } from "./lib/useAutomaticPricing";
 
 const SessionsPage = lazy(() => import("./pages/SessionsPage").then(module => ({ default: module.SessionsPage })));
 const SessionDetailPage = lazy(() => import("./pages/SessionDetailPage").then(module => ({ default: module.SessionDetailPage })));
@@ -13,6 +14,7 @@ const SyncPage = lazy(() => import("./pages/SyncPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 
 export function App() {
+  useAutomaticPricing();
   return (
     <AppShell>
       <Suspense fallback={<div className="page-loading">載入分析資料…</div>}>

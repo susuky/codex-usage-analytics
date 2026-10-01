@@ -2,6 +2,21 @@ use crate::models::{PricingRule, SessionAggregate, TokenBreakdown};
 #[cfg(test)]
 use crate::models::default_pricing_rules;
 
+pub fn validate_rule(rule: &PricingRule) -> Result<(), String> {
+    let rates = [rule.input_usd_per_million, rule.cached_usd_per_million, rule.cache_write_usd_per_million,
+        rule.output_usd_per_million, rule.cache_write_multiplier, rule.priority_multiplier];
+    if rule.model.trim().is_empty() || rates.iter().any(|value| !value.is_finite() || *value < 0.0) {
+        return Err("模型名稱不可空白，價格與倍率請填 0 或正數。".into());
+    }
+    if !(1..=9_007_199_254_740_991).contains(&rule.long_context_threshold) {
+        return Err("長 context 的輸入門檻請填寫正整數。".into());
+    }
+    if [rule.long_input_multiplier, rule.long_output_multiplier].iter().any(|value| !value.is_finite() || *value <= 0.0) {
+        return Err("長 context 的倍率請填寫大於 0 的數字。".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 pub fn estimate_microusd(model: &str, tokens: &TokenBreakdown) -> Option<i64> {
     estimate_with_rules(model, tokens, &default_pricing_rules())
@@ -29,19 +44,26 @@ pub fn estimate_with_rules_for_tier(model: &str, tokens: &TokenBreakdown, servic
         return None;
     }
     let normalized_model = model.trim().to_ascii_lowercase();
-    let rule = rules.iter().find(|rule| {
+    let rule = rules.iter().find(|rule| rule.model.trim().eq_ignore_ascii_case(&normalized_model)).or_else(|| rules.iter().find(|rule| {
         let rule_model = rule.model.trim().to_ascii_lowercase();
         normalized_model == rule_model || normalized_model
             .strip_prefix(&format!("{rule_model}-"))
             .and_then(|suffix| suffix.chars().next())
             .is_some_and(|first| first.is_ascii_digit())
-    }).or_else(|| {
+    })).or_else(|| {
         (model == "gpt-5.6").then(|| rules.iter().find(|rule| rule.model == "gpt-5.6-sol")).flatten()
     })?;
     let uncached = (tokens.input_tokens - tokens.cached_input_tokens - tokens.cache_write_input_tokens).max(0) as f64;
     let cached = tokens.cached_input_tokens.max(0) as f64;
     let cache_write = tokens.cache_write_input_tokens.max(0) as f64;
     let long = tokens.input_tokens > rule.long_context_threshold;
+    if rule.unavailable_rates.iter().any(|rate| match rate.as_str() {
+        "cached" => tokens.cached_input_tokens > 0,
+        "cacheWrite" => tokens.cache_write_input_tokens > 0,
+        "fast" => is_fast_tier(service_tier),
+        "longFast" => long && is_fast_tier(service_tier),
+        _ => false,
+    }) { return None; }
     let input_multiplier = if long { rule.long_input_multiplier } else { 1.0 };
     let output_multiplier = if long { rule.long_output_multiplier } else { 1.0 };
     let micro = (uncached * rule.input_usd_per_million * input_multiplier)
@@ -117,6 +139,47 @@ mod tests {
     fn long_context_and_cache_write_multipliers_apply() {
         let usage = TokenBreakdown { input_tokens: 300_000, cached_input_tokens: 0, cache_write_input_tokens: 100_000, output_tokens: 10_000, reasoning_output_tokens: 0, total_tokens: 310_000 };
         assert_eq!(estimate_microusd("gpt-5.6-luna", &usage), Some(148_000));
+    }
+
+    #[test]
+    fn long_context_uses_all_input_including_cache_and_prices_the_full_request() {
+        let at_boundary = TokenBreakdown { input_tokens: 272_000, cached_input_tokens: 250_000, output_tokens: 10_000, total_tokens: 282_000, ..TokenBreakdown::default() };
+        assert_eq!(estimate_microusd("gpt-5.6-sol", &at_boundary), Some(388_000));
+        let above = TokenBreakdown { input_tokens: 272_001, total_tokens: 282_001, ..at_boundary };
+        assert_eq!(estimate_microusd("gpt-5.6-sol", &above), Some(676_008));
+        // Output and cumulative totals do not determine the input boundary.
+        let output_above = TokenBreakdown { input_tokens: 260_000, output_tokens: 20_000, total_tokens: 280_000, ..TokenBreakdown::default() };
+        assert_eq!(estimate_microusd("gpt-5.6-sol", &output_above), Some(1_440_000));
+        let requests: Vec<_> = (1..=2).map(|ordinal| {
+            let tokens = TokenBreakdown { input_tokens: 200_000, output_tokens: 10_000, total_tokens: 210_000, ..TokenBreakdown::default() };
+            crate::models::TurnUsage { ordinal, timestamp: "2026-10-01T00:00:00Z".into(), model: "gpt-5.6-sol".into(), service_tier: "default".into(), reasoning_effort: "high".into(), estimate_microusd: estimate_microusd("gpt-5.6-sol", &tokens), tokens, cache_rate: 0.0 }
+        }).collect();
+        assert_eq!(summarize_session_estimate(&requests, 420_000), (Some(2_000_000), 0, 0));
+    }
+
+    #[test]
+    fn custom_context_rules_apply_and_disabled_rules_keep_normal_prices() {
+        let mut rule = default_pricing_rules().remove(0);
+        rule.long_context_threshold = 500;
+        let usage = TokenBreakdown { input_tokens: 1000, cached_input_tokens: 800, output_tokens: 100, total_tokens: 1100, ..TokenBreakdown::default() };
+        assert_eq!(estimate_with_rules("gpt-5.6-sol", &usage, &[rule.clone()]), Some(5240));
+        rule.long_input_multiplier = 1.0; rule.long_output_multiplier = 1.0;
+        assert_eq!(estimate_with_rules("gpt-5.6-sol", &usage, &[rule]), Some(3120));
+    }
+
+    #[test]
+    fn rejects_invalid_context_rules_before_saving() {
+        let original = default_pricing_rules().remove(0);
+        assert!(validate_rule(&original).is_ok());
+        for threshold in [0, -1, i64::MAX] {
+            let rule = PricingRule { long_context_threshold: threshold, ..original.clone() };
+            assert!(validate_rule(&rule).is_err());
+        }
+        for multiplier in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(validate_rule(&PricingRule { long_input_multiplier: multiplier, ..original.clone() }).is_err());
+            assert!(validate_rule(&PricingRule { long_output_multiplier: multiplier, ..original.clone() }).is_err());
+        }
+        assert!(validate_rule(&PricingRule { input_usd_per_million: f64::NAN, ..original }).is_err());
     }
 
     #[test]

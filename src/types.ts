@@ -125,6 +125,7 @@ export interface PricingRule {
   priorityMultiplier: number;
   sourceUrl: string;
   reviewedAt: string;
+  unavailableRates?: string[];
 }
 
 export interface ScanResult {
@@ -158,6 +159,19 @@ export interface AppSettings {
   cloudEnabled: boolean;
   pollMinutes: number;
   pricingRules: PricingRule[];
+  autoUpdatePricing?: boolean;
+}
+
+export interface PricingStatus {
+  checkedAt: string | null;
+  updatedAt: string | null;
+  lastError: string | null;
+  officialRules: PricingRule[];
+}
+
+export interface PricingUpdateResult {
+  status: PricingStatus;
+  changed: boolean;
 }
 
 export interface SshSourceConfig {

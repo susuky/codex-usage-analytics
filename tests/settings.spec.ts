@@ -20,17 +20,20 @@ test("multiple SSH sources test independently and custom pricing survives save",
   await expect(ll1Source.getByRole("status")).toContainText("正在連線");
   await expect(ll1Source.getByRole("status")).toContainText("已透過系統 OpenSSH 連線");
 
-  await page.getByRole("button", { name: "新增模型" }).click();
+  await page.getByRole("button", { name: "保存設定" }).click();
+  await expect(page.getByText("設定已保存，既有費用已重新計算")).toBeVisible();
+  await page.getByRole("button", { name: "新增自訂價格" }).click();
   const modelInput = page.getByPlaceholder("例如 codex-auto-review").last();
   await modelInput.fill("codex-auto-review");
   await page.getByLabel("codex-auto-review input 價格").fill("1.5");
   await page.getByLabel("codex-auto-review cached input 價格").fill("0.15");
   await page.getByLabel("codex-auto-review cache writes 價格").fill("1.88");
   await page.getByLabel("codex-auto-review output 價格").fill("6");
-  await page.getByRole("button", { name: "保存設定" }).click();
-  await expect(page.getByRole("status").last()).toContainText("設定已保存");
+  await page.getByRole("button", { name: "保存價格" }).click();
+  await expect(page.getByText("codex-auto-review 的價格已保存。")).toBeVisible();
 
   await page.reload();
+  await page.getByRole("button", { name: "編輯 codex-auto-review 價格" }).click();
   await expect(page.locator('input[value="codex-auto-review"]')).toBeVisible();
   await expect(page.getByLabel("codex-auto-review output 價格")).toHaveValue("6");
 });

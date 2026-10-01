@@ -11,7 +11,7 @@ function Probe() {
   return <><button onClick={() => setFilter({days:30})}>30</button><button onClick={() => setFilter({days:7})}>7</button>
     <button onClick={() => void refresh(true)}>scan</button><output>{filter.days}:{data?.totals.totalTokens ?? "loading"}</output><span>{scanning ? "busy" : "idle"}</span><p>{error}</p></>;
 }
-beforeEach(() => { vi.mocked(getSettings).mockResolvedValue({pollMinutes:15} as Awaited<ReturnType<typeof getSettings>>); vi.mocked(scanSources).mockReturnValue(new Promise(() => {})); });
+beforeEach(() => { localStorage.clear(); vi.mocked(getSettings).mockResolvedValue({pollMinutes:15} as Awaited<ReturnType<typeof getSettings>>); vi.mocked(scanSources).mockReturnValue(new Promise(() => {})); });
 afterEach(() => vi.resetAllMocks());
 it("rejects old filter responses arriving after the current filter",async () => {
   const pending:Array<{days:number;resolve:(data:OverviewData)=>void}>=[];

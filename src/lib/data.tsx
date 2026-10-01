@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getOverview, getSettings, scanSources } from "./api";
+import { loadDateRange, saveDateRange } from "./preferences";
 import type { OverviewData, UsageFilter } from "../types";
 
 interface DataContextValue {
@@ -17,7 +18,7 @@ interface DataContextValue {
 const DataContext = createContext<DataContextValue | null>(null);
 
 export function DataProvider({ children }: { children: ReactNode }) {
-  const [filter, updateFilter] = useState<UsageFilter>({ days: 365 });
+  const [filter, updateFilter] = useState<UsageFilter>(loadDateRange);
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
@@ -26,6 +27,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [pollMinutes, setPollMinutes] = useState(15);
   const requestVersion = useRef(0);
   const setFilter = useCallback((next: UsageFilter) => {
+    saveDateRange(next);
     requestVersion.current += 1;
     setData(null);
     setLoading(true);

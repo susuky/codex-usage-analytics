@@ -2,6 +2,7 @@ mod db;
 mod models;
 mod parser;
 mod pricing;
+mod pricing_update;
 mod scanner;
 mod ssh;
 mod process;
@@ -225,12 +226,10 @@ async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, String>
 }
 
 #[tauri::command]
-async fn save_settings(state: State<'_, AppState>, settings: AppSettings) -> Result<(), String> {
+async fn save_settings(state: State<'_, AppState>, mut settings: AppSettings, base_pricing_rules: Option<Vec<models::PricingRule>>) -> Result<(), String> {
     let db_path = state.db_path.clone();
     run_blocking(move || {
-        if settings.pricing_rules.iter().any(|rule| rule.model.trim().is_empty() || rule.input_usd_per_million < 0.0 || rule.cached_usd_per_million < 0.0 || rule.cache_write_usd_per_million < 0.0 || rule.output_usd_per_million < 0.0 || rule.priority_multiplier < 0.0) {
-            return Err("模型名稱不可空白，價格與倍率不可小於 0".into());
-        }
+        for rule in &settings.pricing_rules { pricing::validate_rule(rule)?; }
         let mut models = std::collections::HashSet::new();
         if settings.pricing_rules.iter().any(|rule| !models.insert(rule.model.trim().to_ascii_lowercase())) { return Err("模型名稱不可重複".into()); }
         let mut source_ids = std::collections::HashSet::new();
@@ -240,9 +239,26 @@ async fn save_settings(state: State<'_, AppState>, settings: AppSettings) -> Res
             if !source_ids.insert(source.id.clone()) { return Err("SSH 來源 ID 不可重複".into()); }
         }
         let mut connection = db::open(&db_path)?;
-        db::save_settings(&connection, &settings)?;
-        db::reprice_all_sessions(&mut connection, &settings.pricing_rules)
+        let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|error| error.to_string())?;
+        if let Some(base) = base_pricing_rules {
+            settings.pricing_rules = pricing_update::merge_settings_draft(&settings.pricing_rules, &base, &db::load_settings(&tx)?.pricing_rules);
+        }
+        db::save_settings(&tx, &settings)?;
+        db::reprice_in_transaction(&tx, &settings.pricing_rules)?;
+        tx.commit().map_err(|error| error.to_string())
     }).await
+}
+
+#[tauri::command]
+async fn get_pricing_status(state: State<'_, AppState>) -> Result<pricing_update::PricingStatus, String> {
+    let path = state.db_path.clone();
+    run_blocking(move || pricing_update::load_status(&db::open(&path)?)).await
+}
+
+#[tauri::command]
+async fn refresh_pricing(state: State<'_, AppState>, force: bool) -> Result<pricing_update::PricingUpdateResult, String> {
+    let path = state.db_path.clone();
+    run_blocking(move || pricing_update::refresh(&path, force)).await
 }
 
 #[tauri::command]
@@ -293,7 +309,16 @@ fn secure_remove(key: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let mut window_state = tauri_plugin_window_state::Builder::default().with_state_flags(
+        tauri_plugin_window_state::StateFlags::SIZE | tauri_plugin_window_state::StateFlags::POSITION | tauri_plugin_window_state::StateFlags::MAXIMIZED
+    );
+    // Isolated test databases must not alter the user's normal window state.
+    if let Some(path) = std::env::var_os("CODEX_USAGE_DB_PATH") {
+        let path = PathBuf::from(path).with_extension("window-state.json");
+        window_state = window_state.with_filename(path.to_string_lossy());
+    }
     tauri::Builder::default()
+        .plugin(window_state.build())
         .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
             let db_path = if let Some(path) = std::env::var_os("CODEX_USAGE_DB_PATH") {
@@ -309,7 +334,7 @@ pub fn run() {
             { use tauri_plugin_deep_link::DeepLinkExt; app.deep_link().register_all()?; }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![scan_sources, test_ssh_source, list_sessions, get_session_detail, get_overview, get_settings, save_settings, open_pricing_docs, secure_get, secure_set, secure_remove, get_sync_state, save_sync_state, merge_cloud_sessions])
+        .invoke_handler(tauri::generate_handler![scan_sources, test_ssh_source, list_sessions, get_session_detail, get_overview, get_settings, save_settings, get_pricing_status, refresh_pricing, open_pricing_docs, secure_get, secure_set, secure_remove, get_sync_state, save_sync_state, merge_cloud_sessions])
         .run(tauri::generate_context!())
         .expect("error while running Codex usage analytics");
 }

@@ -50,7 +50,6 @@ export function OverviewPage() {
         <Metric icon={MessagesSquare} label="Sessions" value={formatInteger(data.sessions.length)} hint="所選區間內的對話" />
       </section>
       <div className={styles.content}>
-        <UsageHealth data={data} scanning={scanning} />
         <div className={styles.charts}>
           <section className={styles.chartPanel}>
             <div className={styles.sectionHeading}><h2 className={styles.panelTitle}>每日 Token 趨勢</h2><Link to="/trends" className={styles.textLink}>查看趨勢<ArrowUpRight size={14} /></Link></div>
@@ -59,6 +58,7 @@ export function OverviewPage() {
           </section>
           <ModelDistribution models={data.models} total={data.totals.totalTokens} />
         </div>
+        <UsageHealth data={data} scanning={scanning} />
         <button className={styles.disclosureButton} aria-expanded={showDailyTable} aria-controls="daily-usage-table" onClick={() => setShowDailyTable(value => !value)}>{showDailyTable ? "收合每日明細" : "查看每日明細"}</button>
         {showDailyTable ? <section id="daily-usage-table" className={styles.tablePanel}><h2 className={styles.tableTitle}>每日用量明細</h2><div className={styles.dailyTableScroll} tabIndex={0} aria-label="每日用量明細"><table className={styles.table}><thead><tr>{["日期", "未快取輸入", "Cached input", "Cache writes", "輸出", "未分類"].map(label => <th key={label} scope="col">{label}</th>)}</tr></thead><tbody>{chartData.map(day => <tr key={day.date}><td>{day.date}</td>{[day.uncachedInput, day.cachedInput, day.cacheWriteInput, day.output, day.unclassified].map((value, index) => <td key={index}>{formatInteger(value)}</td>)}</tr>)}</tbody></table></div></section> : null}
         <section className={styles.tablePanel}><div className={styles.sectionHeading}><h2 className={styles.tableTitle}>最近 Sessions</h2><Link to="/sessions" className={styles.textLink}>查看全部<ArrowUpRight size={14} /></Link></div>{data.sessions.length ? <SessionTable sessions={data.sessions} limit={6} /> : <div className={styles.empty}>此區間尚無使用紀錄，請調整日期或掃描資料來源。</div>}</section>

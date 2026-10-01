@@ -113,7 +113,7 @@ pub struct ScanBatch {
     pub skipped_files: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PricingRule {
     pub model: String,
@@ -130,18 +130,20 @@ pub struct PricingRule {
     pub priority_multiplier: f64,
     pub source_url: String,
     pub reviewed_at: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unavailable_rates: Vec<String>,
 }
 
 fn default_priority_multiplier() -> f64 { 2.0 }
 
 pub fn default_pricing_rules() -> Vec<PricingRule> {
     vec![
-        PricingRule { model: "gpt-5.6-sol".into(), input_usd_per_million: 4.0, cached_usd_per_million: 0.40, cache_write_usd_per_million: 5.0, output_usd_per_million: 20.0, cache_write_multiplier: 1.25, long_context_threshold: 272_000, long_input_multiplier: 2.0, long_output_multiplier: 1.5, priority_multiplier: 2.0, source_url: "https://developers.openai.com/api/docs/models/gpt-5.6-sol".into(), reviewed_at: "2026-09-03".into() },
-        PricingRule { model: "gpt-5.6-terra".into(), input_usd_per_million: 2.0, cached_usd_per_million: 0.20, cache_write_usd_per_million: 2.50, output_usd_per_million: 12.0, cache_write_multiplier: 1.25, long_context_threshold: 272_000, long_input_multiplier: 2.0, long_output_multiplier: 1.5, priority_multiplier: 2.0, source_url: "https://developers.openai.com/api/docs/models/gpt-5.6-terra".into(), reviewed_at: "2026-09-03".into() },
-        PricingRule { model: "gpt-5.6-luna".into(), input_usd_per_million: 0.20, cached_usd_per_million: 0.02, cache_write_usd_per_million: 0.25, output_usd_per_million: 1.20, cache_write_multiplier: 1.25, long_context_threshold: 272_000, long_input_multiplier: 2.0, long_output_multiplier: 1.5, priority_multiplier: 2.0, source_url: "https://developers.openai.com/api/docs/models/gpt-5.6-luna".into(), reviewed_at: "2026-09-03".into() },
-        PricingRule { model: "gpt-5.5".into(), input_usd_per_million: 5.0, cached_usd_per_million: 0.50, cache_write_usd_per_million: 6.25, output_usd_per_million: 30.0, cache_write_multiplier: 1.25, long_context_threshold: 272_000, long_input_multiplier: 2.0, long_output_multiplier: 1.5, priority_multiplier: 2.0, source_url: "https://developers.openai.com/api/docs/models/gpt-5.5".into(), reviewed_at: "2026-09-03".into() },
-        PricingRule { model: "gpt-5.4".into(), input_usd_per_million: 2.50, cached_usd_per_million: 0.25, cache_write_usd_per_million: 3.125, output_usd_per_million: 15.0, cache_write_multiplier: 1.25, long_context_threshold: 272_000, long_input_multiplier: 2.0, long_output_multiplier: 1.5, priority_multiplier: 2.0, source_url: "https://developers.openai.com/api/docs/models/gpt-5.4".into(), reviewed_at: "2026-09-03".into() },
-        PricingRule { model: "gpt-5.3-codex".into(), input_usd_per_million: 1.75, cached_usd_per_million: 0.175, cache_write_usd_per_million: 2.1875, output_usd_per_million: 14.0, cache_write_multiplier: 1.25, long_context_threshold: 400_000, long_input_multiplier: 1.0, long_output_multiplier: 1.0, priority_multiplier: 2.0, source_url: "https://developers.openai.com/api/docs/models/gpt-5.3-codex".into(), reviewed_at: "2026-09-03".into() },
+        PricingRule { model: "gpt-5.6-sol".into(), input_usd_per_million: 4.0, cached_usd_per_million: 0.40, cache_write_usd_per_million: 5.0, output_usd_per_million: 20.0, cache_write_multiplier: 1.25, long_context_threshold: 272_000, long_input_multiplier: 2.0, long_output_multiplier: 1.5, priority_multiplier: 2.0, source_url: "https://developers.openai.com/api/docs/models/gpt-5.6-sol".into(), reviewed_at: "2026-09-03".into(), unavailable_rates: Vec::new() },
+        PricingRule { model: "gpt-5.6-terra".into(), input_usd_per_million: 2.0, cached_usd_per_million: 0.20, cache_write_usd_per_million: 2.50, output_usd_per_million: 12.0, cache_write_multiplier: 1.25, long_context_threshold: 272_000, long_input_multiplier: 2.0, long_output_multiplier: 1.5, priority_multiplier: 2.0, source_url: "https://developers.openai.com/api/docs/models/gpt-5.6-terra".into(), reviewed_at: "2026-09-03".into(), unavailable_rates: Vec::new() },
+        PricingRule { model: "gpt-5.6-luna".into(), input_usd_per_million: 0.20, cached_usd_per_million: 0.02, cache_write_usd_per_million: 0.25, output_usd_per_million: 1.20, cache_write_multiplier: 1.25, long_context_threshold: 272_000, long_input_multiplier: 2.0, long_output_multiplier: 1.5, priority_multiplier: 2.0, source_url: "https://developers.openai.com/api/docs/models/gpt-5.6-luna".into(), reviewed_at: "2026-09-03".into(), unavailable_rates: Vec::new() },
+        PricingRule { model: "gpt-5.5".into(), input_usd_per_million: 5.0, cached_usd_per_million: 0.50, cache_write_usd_per_million: 6.25, output_usd_per_million: 30.0, cache_write_multiplier: 1.25, long_context_threshold: 272_000, long_input_multiplier: 2.0, long_output_multiplier: 1.5, priority_multiplier: 2.0, source_url: "https://developers.openai.com/api/docs/models/gpt-5.5".into(), reviewed_at: "2026-09-03".into(), unavailable_rates: Vec::new() },
+        PricingRule { model: "gpt-5.4".into(), input_usd_per_million: 2.50, cached_usd_per_million: 0.25, cache_write_usd_per_million: 3.125, output_usd_per_million: 15.0, cache_write_multiplier: 1.25, long_context_threshold: 272_000, long_input_multiplier: 2.0, long_output_multiplier: 1.5, priority_multiplier: 2.0, source_url: "https://developers.openai.com/api/docs/models/gpt-5.4".into(), reviewed_at: "2026-09-03".into(), unavailable_rates: Vec::new() },
+        PricingRule { model: "gpt-5.3-codex".into(), input_usd_per_million: 1.75, cached_usd_per_million: 0.175, cache_write_usd_per_million: 2.1875, output_usd_per_million: 14.0, cache_write_multiplier: 1.25, long_context_threshold: 400_000, long_input_multiplier: 1.0, long_output_multiplier: 1.0, priority_multiplier: 2.0, source_url: "https://developers.openai.com/api/docs/models/gpt-5.3-codex".into(), reviewed_at: "2026-09-03".into(), unavailable_rates: Vec::new() },
     ]
 }
 
@@ -250,7 +252,11 @@ pub struct AppSettings {
     pub poll_minutes: i64,
     #[serde(default = "default_pricing_rules")]
     pub pricing_rules: Vec<PricingRule>,
+    #[serde(default = "default_auto_update_pricing")]
+    pub auto_update_pricing: bool,
 }
+
+fn default_auto_update_pricing() -> bool { true }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -265,6 +271,6 @@ pub struct SshSourceConfig {
 
 impl Default for AppSettings {
     fn default() -> Self {
-        Self { codex_home: String::new(), ssh_target: "user@example-server".into(), ssh_enabled: true, ssh_sources: vec![SshSourceConfig { id: "ssh-example-server".into(), name: "example-server".into(), target: "user@example-server".into(), codex_home: String::new(), enabled: true }], cloud_enabled: true, poll_minutes: 15, pricing_rules: default_pricing_rules() }
+        Self { codex_home: String::new(), ssh_target: "user@example-server".into(), ssh_enabled: true, ssh_sources: vec![SshSourceConfig { id: "ssh-example-server".into(), name: "example-server".into(), target: "user@example-server".into(), codex_home: String::new(), enabled: true }], cloud_enabled: true, poll_minutes: 15, pricing_rules: default_pricing_rules(), auto_update_pricing: true }
     }
 }

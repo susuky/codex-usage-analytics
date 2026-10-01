@@ -8,6 +8,9 @@
 - 支援多個 SSH 來源，透過系統 OpenSSH 以 `BatchMode=yes` 與嚴格 host-key 驗證讀取，不保存密碼或私鑰。
 - SQLite checkpoint、active/archive 去重、容忍 JSONL 未完成末行。
 - 總覽、趨勢、Sessions、模型、同步、設定與 Session 回合明細。
+- 自動記住視窗大小、位置、最大化、側欄與日期週期，自訂日期區間也會保留。
+- 桌面版每日自動檢查 OpenAI 官方 API 價格，支援立即更新與手動價格；離線時沿用上次價格。
+- 模型價格以完整價目表呈現，可依名稱、輸入、快取輸入或輸出價格排序，並直接搜尋全部模型。每列可編輯，價格與每日更新開關均可直接保存。
 - 依每次請求的模式標記統計標準／快速模式，並分開顯示 ChatGPT 額度等值與 API Priority 等值估算。
 - 可選 Supabase Magic Link／PKCE 同步；雲端識別碼均先以使用者 ID 加鹽做 SHA-256。
 - 金額一律標示「API 等值估算」，不是 Codex 訂閱帳單。
@@ -46,13 +49,15 @@ pnpm tauri build
 
 App 啟動時會增量掃描，之後依設定的間隔更新，預設為 15 分鐘；右上角重新掃描及同步頁的「完整掃描所有來源」會掃描本機與所有已啟用的 SSH 來源。同步頁分別顯示本次掃描時間與來源中最新的 Token 資料時間。
 
+官方價格更新只下載公開的 [OpenAI 定價表](https://developers.openai.com/api/docs/pricing)，不傳送使用紀錄，也不需要 API Key。成功檢查後快取 24 小時；失敗後保留原有價格，最多每小時重試一次。使用者手動修改的模型價格會保留；在設定頁選擇「使用官方價格」並保存，可恢復自動更新該模型。未公布或目前無法完整換算的價格維持未定價，不能視為零費用。
+
 ## 驗證
 
 `pnpm test` 包含 React 延遲回應、持久同步佇列、敏感欄位白名單，以及使用 PGlite 執行實際 PostgreSQL migrations／RLS／原子回滾測試；`cargo test` 包含 Windows 共用讀取、Python／PowerShell／Rust 統計一致性、逾時及資料保留測試。Windows 需 Python 可從 PATH 執行。`pnpm test:e2e` 驗證瀏覽器互動；該模式使用範例資料，不代表原生 SSH 或 Supabase Auth 的端到端驗證。
 
 ## 定價說明
 
-內建 GPT-5.3 Codex、GPT-5.4、GPT-5.5，以及 GPT-5.6 Sol、Terra、Luna 的 API 等值費率。快取寫入按 input 費率 1.25 倍，超過 272K input token 的回合套用長上下文倍率；output 已包含 reasoning，不重複計價。快速模式最高提升 1.5 倍速度，但 1.5 倍不是價格倍率：GPT-5.6 的 API Priority 等值預設按標準價格 2 倍估算；ChatGPT 額度等值則依官方快速模式規則，GPT-5.6／5.5 為 2.5 倍、GPT-5.4 為 2 倍。沒有官方模型對應的名稱仍顯示「無法估算」，也可在設定頁自訂價格。
+內建 GPT-5.3 Codex、GPT-5.4、GPT-5.5，以及 GPT-5.6 Sol、Terra、Luna 的 API 等值費率，桌面版會自動更新官方價目表，包括 GPT-6 Astra 和 GPT-6.1 Sol。長 context 以單次請求的 input（含快取）判斷；依各模型門檻，對整筆請求的輸入、快取與輸出套用倍率，不以整段對話累計 Tokens 判斷。設定頁顯示一般單價、加價門檻及倍率，編輯時可預覽加價後單價；自訂模型預設不啟用長 context 加價。官方未提供的定價仍標為尚未定價，output 已包含 reasoning，不重複計價。快速模式的速度倍率與價格倍率不同：API 等值使用官方 Fast / Priority 價格，ChatGPT 額度等值則依其快速模式規則估算。
 
 模型頁與 Session 回合明細會顯示 JSONL 實際記錄的 Thinking 程度；舊紀錄沒有此欄位時顯示「未記錄」，不會根據 reasoning token 數量猜測。
 
