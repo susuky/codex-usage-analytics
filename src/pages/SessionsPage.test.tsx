@@ -17,11 +17,13 @@ beforeEach(() => {
 afterEach(cleanup);
 
 it("clamps an out-of-range page and totals all results rather than the visible page", () => {
+  state.data!.sessions = state.data!.sessions.map((session, index) => index % 4 === 0 ? { ...session, sourceId: "test-remote", sourceName: "測試遠端", sourceKind: "ssh" } : session);
+  state.data!.sources.push({ ...state.data!.sources[0], id: "test-remote", name: "測試遠端", kind: "ssh", sessionCount: 11 });
   const { container } = render(<MemoryRouter initialEntries={["/sessions?page=999"]}><SessionsPage /></MemoryRouter>);
   expect(container.querySelectorAll("tbody tr")).toHaveLength(17);
   expect(screen.getByText("第 2 / 2 頁")).toBeVisible();
   expect(screen.getByRole("region", { name: "篩選結果摘要" })).toHaveTextContent(formatTokens(state.data!.totals.totalTokens));
-  fireEvent.change(screen.getByLabelText("來源", { exact: true }), { target: { value: "ssh-example-server" } });
+  fireEvent.change(screen.getByLabelText("來源", { exact: true }), { target: { value: "test-remote" } });
   expect(container.querySelectorAll("tbody tr")).toHaveLength(11);
   expect(screen.getByText("第 1 / 1 頁")).toBeVisible();
 });

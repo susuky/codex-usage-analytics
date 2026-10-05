@@ -1,17 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
-import { buildDemoOverview, demoSessions, demoSources } from "./mockData";
+import { buildDemoOverview, buildDemoSources, demoSessions } from "./mockData";
 import { localDateKey } from "./daily";
 import type { AppSettings, OverviewData, PricingRule, PricingStatus, PricingUpdateResult, ScanResult, SessionAggregate, SshSourceConfig, StoredSyncState, UsageFilter, UsageSource } from "../types";
 
 const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 export async function getOverview(filter: UsageFilter): Promise<OverviewData> {
-  if (!isTauri()) return filterDemo(buildDemoOverview(), filter);
+  if (!isTauri()) return filterDemo(buildDemoOverview((await getSettings()).sshSources), filter);
   return invoke<OverviewData>("get_overview", { filter });
 }
 
 export async function listSessions(filter: UsageFilter): Promise<SessionAggregate[]> {
-  if (!isTauri()) return filterDemo(buildDemoOverview(), filter).sessions;
+  if (!isTauri()) return (await getOverview(filter)).sessions;
   return invoke<SessionAggregate[]>("list_sessions", { filter });
 }
 
@@ -26,7 +26,7 @@ export async function getSessionDetail(sourceId: string, sessionId: string): Pro
 export async function scanSources(forceFull = false): Promise<ScanResult> {
   if (!isTauri()) {
     await new Promise((resolve) => setTimeout(resolve, 550));
-    return { sources: demoSources, scannedSessions: demoSessions.length, scannedAt: new Date().toISOString() };
+    return { sources: buildDemoSources((await getSettings()).sshSources), scannedSessions: demoSessions.length, scannedAt: new Date().toISOString() };
   }
   return invoke<ScanResult>("scan_sources", { forceFull });
 }
@@ -73,8 +73,12 @@ const defaultSettings: AppSettings = {
 export async function getSettings(): Promise<AppSettings> {
   if (!isTauri()) {
     const raw = sessionStorage.getItem("codex-usage-settings");
-    const loaded = raw ? { ...defaultSettings, ...JSON.parse(raw) } : defaultSettings;
-    if (!loaded.sshSources?.length && loaded.sshTarget) loaded.sshSources = [{ id: "ssh-example-server", name: "example-server", target: loaded.sshTarget, codexHome: "", enabled: loaded.sshEnabled ?? true }];
+    const saved = raw ? JSON.parse(raw) as Partial<AppSettings> : {};
+    const loaded = { ...defaultSettings, ...saved };
+    if (!("sshSources" in saved) && loaded.sshTarget?.trim()) {
+      const host = loaded.sshTarget.split("@").at(-1) || "remote";
+      loaded.sshSources = [{ id: `ssh-${host}`, name: host, target: loaded.sshTarget, codexHome: "", enabled: loaded.sshEnabled ?? true }];
+    }
     loaded.sshSources = (loaded.sshSources ?? []).map((source: SshSourceConfig) => ({ ...source, codexHome: source.codexHome ?? "" }));
     loaded.pricingRules = (loaded.pricingRules?.length ? loaded.pricingRules : defaultPricingRules).map((rule: PricingRule) => ({ ...rule, priorityMultiplier: rule.priorityMultiplier ?? 2 }));
     return loaded;

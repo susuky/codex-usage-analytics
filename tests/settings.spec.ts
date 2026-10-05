@@ -50,3 +50,28 @@ test("sync page distinguishes scan time from latest source data and runs a full 
   await expect(page.getByText("正在完整掃描本機與遠端來源，完成後會自動更新。")).toBeVisible();
   await expect(page.getByRole("button", { name: "完整掃描所有來源" })).toBeEnabled({ timeout: 10_000 });
 });
+
+test("remote sources appear only from saved settings and disappear when removed", async ({ page }) => {
+  await page.goto("/sync");
+  await expect(page.locator(".source-list article")).toHaveCount(1);
+  await page.goto("/settings");
+  await page.getByRole("button", { name: "新增主機" }).click();
+  await page.getByLabel("SSH 來源 1 名稱").fill("Custom server");
+  await page.getByLabel("Custom server SSH Target").fill("operator@custom-host");
+  await page.getByRole("button", { name: "保存設定" }).click();
+  await expect(page.getByText("設定已保存，既有費用已重新計算")).toBeVisible();
+  await page.goto("/sync");
+  await expect(page.locator(".source-list article")).toHaveCount(2);
+  const remote = page.locator(".source-list article").filter({ hasText: "Custom server" });
+  await expect(remote).toContainText("operator@custom-host");
+  await expect(remote).toContainText("0 Sessions");
+  await expect(remote).toContainText("尚無完整掃描紀錄");
+  await page.goto("/settings");
+  await page.getByRole("button", { name: "刪除 SSH 來源 Custom server" }).click();
+  await page.getByRole("button", { name: "保存設定" }).click();
+  await expect(page.getByText("設定已保存，既有費用已重新計算")).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("button", { name: "測試連線" })).toHaveCount(0);
+  await page.goto("/sync");
+  await expect(page.locator(".source-list article")).toHaveCount(1);
+});

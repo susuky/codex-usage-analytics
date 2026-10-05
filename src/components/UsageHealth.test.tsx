@@ -8,7 +8,7 @@ afterEach(cleanup);
 
 it("links incomplete sources and unpriced usage to their details", () => {
   const data = buildDemoOverview();
-  data.sources = [{ ...data.sources[0], stale: true }, { ...data.sources[1], enabled: false, lastError: "old error" }];
+  data.sources = [{ ...data.sources[0], stale: true }, { ...data.sources[0], id: "disabled", enabled: false, lastError: "old error" }];
   render(<MemoryRouter><UsageHealth data={data} scanning={false} /></MemoryRouter>);
   expect(screen.getByRole("link", { name: /1 個來源待更新/ })).toHaveAttribute("href", "/sync");
   expect(screen.getByRole("link", { name: /tokens 尚未定價/ })).toHaveAttribute("href", "/models");

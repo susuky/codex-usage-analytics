@@ -1,4 +1,4 @@
-import type { OverviewData, SessionAggregate, TokenBreakdown, TurnUsage, UsageSource } from "../types";
+import type { OverviewData, SessionAggregate, SshSourceConfig, TokenBreakdown, TurnUsage, UsageSource } from "../types";
 import { localDateKey } from "./daily";
 
 const baseDate = new Date();
@@ -29,9 +29,9 @@ export const demoSessions: SessionAggregate[] = Array.from({ length: 42 }, (_, i
   const modelRate = model === "gpt-5.6-sol" ? 4 : model === "gpt-5.6-terra" ? 2 : model === "gpt-5.6-luna" ? 0.2 : model === "gpt-5.5" ? 5 : model === "gpt-5.4" ? 2.5 : null;
   return {
     sessionId: `00000000-0000-4000-${String(9000 + index)}-000000000000`,
-    sourceId: index % 4 === 0 ? "ssh-example-server" : "local",
-    sourceName: index % 4 === 0 ? "example-server" : "這台電腦",
-    sourceKind: index % 4 === 0 ? "ssh" : "local",
+    sourceId: "local",
+    sourceName: "這台電腦",
+    sourceKind: "local",
     project: projects[index % projects.length],
     model,
     startedAt: date.toISOString(),
@@ -86,12 +86,17 @@ demoSessions[2] = {
   tokenEventCount: detailTurns.length
 };
 
-export const demoSources: UsageSource[] = [
-  { id: "local", name: "這台電腦", kind: "local", enabled: true, stale: false, lastScannedAt: new Date().toISOString(), lastError: null, sessionCount: 31, latestDataAt: new Date().toISOString() },
-  { id: "ssh-example-server", name: "example-server", kind: "ssh", target: "user@example-server", enabled: true, stale: false, lastScannedAt: new Date().toISOString(), lastError: null, sessionCount: 11, latestDataAt: new Date().toISOString() }
-];
+export function buildDemoSources(remoteSources: SshSourceConfig[] = []): UsageSource[] {
+  return [
+    { id: "local", name: "這台電腦", kind: "local", enabled: true, stale: false, lastScannedAt: new Date().toISOString(), lastError: null, sessionCount: demoSessions.length, latestDataAt: demoSessions[0].endedAt },
+    ...remoteSources.map((source): UsageSource => ({
+      id: source.id, name: source.name, kind: "ssh", target: source.target, enabled: source.enabled,
+      stale: true, lastScannedAt: null, lastError: null, sessionCount: 0, latestDataAt: null
+    }))
+  ];
+}
 
-export function buildDemoOverview(): OverviewData {
+export function buildDemoOverview(remoteSources: SshSourceConfig[] = []): OverviewData {
   const map = new Map<string, { date: string; uncachedInput: number; cachedInput: number; cacheWriteInput: number; output: number; unclassified: number; estimateMicrousd: number; sessions: number }>();
   for (const session of demoSessions) {
     const date = localDateKey(new Date(session.startedAt));
@@ -150,7 +155,7 @@ export function buildDemoOverview(): OverviewData {
     sessions: demoSessions,
     daily,
     models: modelUsage,
-    sources: demoSources,
+    sources: buildDemoSources(remoteSources),
     totals,
     activityTokens: demoSessions.reduce((sum, session) => sum + session.activityTokens, 0),
     estimateMicrousd: demoSessions.reduce((sum, session) => sum + (session.estimateMicrousd ?? 0), 0),

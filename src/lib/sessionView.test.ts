@@ -20,9 +20,10 @@ it("keeps partial, unpriced, zero-cost and zero-usage sessions distinct", () => 
 });
 
 it("combines filters without treating whitespace as a missing result", () => {
-  const view = readSessionView(new URLSearchParams("q=%20ALPHA%20&source=ssh-example-server&model=gpt-5.6-sol&pricing=partial"));
-  expect(filterSessions(demoSessions, view)).toEqual([demoSessions[0]]);
-  expect(filterSessions(demoSessions, { ...view, source: "local" })).toEqual([]);
+  const sessions = demoSessions.map((session, index) => index === 0 ? { ...session, sourceId: "test-remote" } : session);
+  const view = readSessionView(new URLSearchParams("q=%20ALPHA%20&source=test-remote&model=gpt-5.6-sol&pricing=partial"));
+  expect(filterSessions(sessions, view)).toEqual([sessions[0]]);
+  expect(filterSessions(sessions, { ...view, source: "local" })).toEqual([]);
   expect(filterSessions(demoSessions, readSessionView(new URLSearchParams("q=+++")))).toHaveLength(demoSessions.length);
   expect(filterSessions(demoSessions, readSessionView(new URLSearchParams("pricing=unpriced"))).every(session => session.estimateMicrousd === null)).toBe(true);
 });
