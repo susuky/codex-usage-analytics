@@ -74,7 +74,7 @@ pub fn merge(connection: &mut Connection, user: &str, downloads: Vec<Download>) 
         }
         incoming.origin = "Codex".into();
         pricing::reprice_sessions(std::slice::from_mut(&mut incoming),&rules);
-        db::save_sessions(connection,&[incoming])?;
+        db::save_cloud_sessions(connection,&[incoming])?;
     }
     reconcile(connection)
 }
@@ -97,7 +97,7 @@ pub fn reconcile(connection: &mut Connection) -> Result<(),String> {
         let mut merged = cloud.clone();
         merged.source_id = local.source_id; merged.session_id = local.session_id;
         merged.source_name = local.source_name; merged.source_kind = local.source_kind; merged.project = local.project;
-        db::save_sessions(connection,&[merged])?;
+        db::save_cloud_sessions(connection,&[merged])?;
         let saved = db::get_session(connection,local_source,local_id)?;
         let mut existing = saved.turns.as_ref().unwrap().iter();
         if !cloud.turns.as_ref().unwrap().iter().all(|t| existing.any(|old| db::same_timestamp(&old.timestamp,&t.timestamp) && old.tokens.total_tokens==t.tokens.total_tokens)) { continue; }

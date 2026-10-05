@@ -261,7 +261,8 @@ for folder in ("sessions", "archived_sessions"):
             except (OSError, ValueError, TypeError, AttributeError):
                 parsed = None
             if parsed:
-                print(json.dumps(parsed, ensure_ascii=False, separators=(",", ":")))
+                # ASCII JSON escapes preserve Unicode even when stdout uses a legacy encoding.
+                print(json.dumps(parsed, ensure_ascii=True, separators=(",", ":")))
                 if not parsed["scanComplete"]:
                     skipped_files += 1
             else:

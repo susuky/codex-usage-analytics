@@ -26,12 +26,22 @@ export interface SessionRow extends TokenRow {
   source_key: string; session_key: string; project_key: string; started_at: string; ended_at: string;
   model: string; origin: string; token_event_count: number; estimate_microusd: number | null;
   aggregation_version: number; observed_at: string;
+  sync_revision?: string;
 }
 export interface TurnRow extends TokenRow {
   turn_ordinal: number; occurred_at: string; model: string; service_tier: "default" | "priority";
   reasoning_effort: string; estimate_microusd: number | null;
 }
 export interface CloudSnapshot { session: SessionRow; turns: TurnRow[] }
+
+export function remoteFingerprint(row: SessionRow): string {
+  // Include the breakdown for servers awaiting the revision migration. The server
+  // revision also catches turn-only edits that leave the session totals unchanged.
+  return JSON.stringify(["remote-v2", row.sync_revision ?? null, row.project_key, row.started_at, row.ended_at,
+    row.model, row.origin, row.input_tokens, row.cached_input_tokens, row.cache_write_input_tokens,
+    row.output_tokens, row.reasoning_output_tokens, row.total_tokens, row.token_event_count,
+    row.estimate_microusd, row.aggregation_version, row.observed_at]);
+}
 
 const toRow = (tokens: TokenBreakdown): TokenRow => ({
   input_tokens: tokens.inputTokens, cached_input_tokens: tokens.cachedInputTokens, cache_write_input_tokens: tokens.cacheWriteInputTokens,

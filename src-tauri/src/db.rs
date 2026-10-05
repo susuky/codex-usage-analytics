@@ -242,6 +242,15 @@ pub fn disable_ssh_sources(connection: &Connection) -> Result<(), String> {
 }
 
 pub fn save_sessions(connection: &mut Connection, sessions: &[SessionAggregate]) -> Result<usize, String> {
+    save_sessions_with_activity(connection, sessions, true)
+}
+
+pub fn save_cloud_sessions(connection: &mut Connection, sessions: &[SessionAggregate]) -> Result<usize, String> {
+    // Activity comes from local/SSH logs and is absent from cloud snapshots.
+    save_sessions_with_activity(connection, sessions, false)
+}
+
+fn save_sessions_with_activity(connection: &mut Connection, sessions: &[SessionAggregate], replace_activity: bool) -> Result<usize, String> {
     // Streaming SSH jobs write independently. Acquire the write lock before
     // reading prices/history to avoid SQLITE_BUSY_SNAPSHOT on a deferred upgrade.
     let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|error| error.to_string())?;
@@ -290,10 +299,12 @@ pub fn save_sessions(connection: &mut Connection, sessions: &[SessionAggregate])
             params![session.source_id,session.session_id,session.source_name,session.source_kind,session.project,session.model,session.started_at,session.ended_at,session.origin,t.input_tokens,t.cached_input_tokens,t.cache_write_input_tokens,t.output_tokens,t.reasoning_output_tokens,t.total_tokens,session.activity_tokens,session.estimate_microusd,session.token_event_count,session.rate_used_percent,session.rate_window_minutes]
         ).map_err(|error| error.to_string())?;
         tx.execute("DELETE FROM turns WHERE source_id=?1 AND session_id=?2", params![session.source_id, session.session_id]).map_err(|error| error.to_string())?;
-        tx.execute("DELETE FROM session_activity WHERE source_id=?1 AND session_id=?2", params![session.source_id, session.session_id]).map_err(|error| error.to_string())?;
-        for (kind, items) in [("skill", &session.activity.skills), ("plugin", &session.activity.plugins), ("effort", &session.activity.efforts)] {
-            for item in items {
-                tx.execute("INSERT INTO session_activity(source_id,session_id,kind,name,count) VALUES(?1,?2,?3,?4,?5)", params![session.source_id,session.session_id,kind,item.name,item.count]).map_err(|error| error.to_string())?;
+        if replace_activity {
+            tx.execute("DELETE FROM session_activity WHERE source_id=?1 AND session_id=?2", params![session.source_id, session.session_id]).map_err(|error| error.to_string())?;
+            for (kind, items) in [("skill", &session.activity.skills), ("plugin", &session.activity.plugins), ("effort", &session.activity.efforts)] {
+                for item in items {
+                    tx.execute("INSERT INTO session_activity(source_id,session_id,kind,name,count) VALUES(?1,?2,?3,?4,?5)", params![session.source_id,session.session_id,kind,item.name,item.count]).map_err(|error| error.to_string())?;
+                }
             }
         }
         if let Some(turns) = &session.turns {

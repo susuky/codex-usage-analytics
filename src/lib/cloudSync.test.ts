@@ -1,7 +1,7 @@
 import { beforeAll, expect, it } from "vitest";
 import { webcrypto } from "node:crypto";
 import { demoSessions } from "./mockData";
-import { downloadPayload, fingerprint, localKey, queueSnapshots, uploadPayload } from "./cloudSync";
+import { downloadPayload, fingerprint, localKey, queueSnapshots, remoteFingerprint, uploadPayload } from "./cloudSync";
 
 beforeAll(() => Object.defineProperty(globalThis,"crypto",{value:webcrypto,configurable:true}));
 const sample = () => {
@@ -36,4 +36,26 @@ it("uses the same cloud keys across machines and excludes sensitive metadata",as
 it("does not upload summary-only or incomplete snapshots",async () => {
   const item=sample(); item.turns=undefined;
   await expect(uploadPayload("user",item)).rejects.toThrow("不完整");
+});
+
+it("changes the remote version for corrected breakdowns with unchanged totals and timestamps", async () => {
+  const { p_session: row } = await uploadPayload("user", sample());
+  const version = remoteFingerprint(row);
+  const corrections = [
+    { input_tokens: row.input_tokens - 1, output_tokens: row.output_tokens + 1 },
+    { cached_input_tokens: row.cached_input_tokens + 1 },
+    { cache_write_input_tokens: row.cache_write_input_tokens + 1 },
+    { reasoning_output_tokens: row.reasoning_output_tokens + 1 },
+    { model: "corrected-model" },
+  ];
+  for (const correction of corrections) {
+    expect(remoteFingerprint({ ...row, ...correction })).not.toBe(version);
+  }
+  expect(remoteFingerprint({ ...row })).toBe(version);
+});
+
+it("uses the server revision for changes confined to turns", async () => {
+  const { p_session: row } = await uploadPayload("user", sample());
+  expect(remoteFingerprint({ ...row, sync_revision: "first" }))
+    .not.toBe(remoteFingerprint({ ...row, sync_revision: "second" }));
 });

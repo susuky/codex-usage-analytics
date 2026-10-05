@@ -2,7 +2,7 @@ import { createClient, type Session, type SupportedStorage, type SupabaseClient 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { getOverview, getSessionDetail, getSettings, getSyncState, saveSyncState, mergeCloudSessions, saveSettings, secureGet, secureRemove, secureSet } from "./api";
-import { downloadPayload, fingerprint, hashKey, localKey, queueSnapshots, uploadPayload, type CloudSnapshot, type SessionRow } from "./cloudSync";
+import { downloadPayload, fingerprint, localKey, queueSnapshots, remoteFingerprint, uploadPayload, type CloudSnapshot, type SessionRow } from "./cloudSync";
 import { useUsageData } from "./data";
 import type { OverviewData, SyncStatus } from "../types";
 
@@ -113,19 +113,17 @@ export function CloudProvider({ children }: { children: ReactNode }) {
           }
           if ((result.data?.length ?? 0)<500) break;
         }
-        const known = new Map(await Promise.all(overview.sessions.filter((s) => s.sourceKind!=="cloud").map(async (s) => [await hashKey(account,s.sessionId),s] as const)));
         for (const row of rows.values()) {
           signal.throwIfAborted();
-          const local = known.get(row.session_key);
-          if (local && local.tokenEventCount >= row.token_event_count && local.tokens.totalTokens===row.total_tokens) continue;
-          const remoteVersion = JSON.stringify([row.token_event_count,row.total_tokens,row.observed_at,row.aggregation_version]);
+          const remoteVersion = remoteFingerprint(row);
           const ackKey = `remote:${row.session_key}`;
-          if (!local && state.acknowledged[ackKey]===remoteVersion) continue;
+          if (state.acknowledged[ackKey]===remoteVersion) continue;
           const result = await client!.rpc("get_usage_session_v3",{p_source_key:row.source_key,p_session_key:row.session_key}).abortSignal(signal);
           if (result.error) throw result.error;
           if (!result.data) continue;
-          await mergeCloudSessions(account,[downloadPayload(result.data as CloudSnapshot)]);
-          state.acknowledged[ackKey] = remoteVersion;
+          const snapshot = result.data as CloudSnapshot;
+          await mergeCloudSessions(account,[downloadPayload(snapshot)]);
+          state.acknowledged[ackKey] = remoteFingerprint(snapshot.session);
           await saveSyncState(account,state);
         }
         state.lastSyncedAt = new Date().toISOString();

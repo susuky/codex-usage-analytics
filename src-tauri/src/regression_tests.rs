@@ -131,6 +131,87 @@ fn cloud_copy_merges_without_doubling_and_rejects_a_shorter_download() {
     assert_eq!(db::get_session(&connection,"local","regression").unwrap().token_event_count,4);
 }
 
+fn activity_fixture() -> String {
+    fixture() + &json!({"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","input":"cat /skills/frontend-craft/SKILL.md; tools.mcp__node_repl__js({})"}}).to_string() + "\n"
+}
+
+fn activity_rows(connection: &rusqlite::Connection) -> Vec<(String, String, i64)> {
+    connection.prepare("SELECT kind,name,count FROM session_activity ORDER BY kind,name").unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap()
+        .collect::<Result<Vec<_>, _>>().unwrap()
+}
+
+fn corrected_cloud_copy(mut session: SessionAggregate) -> SessionAggregate {
+    session.activity = SessionActivity::default();
+    let tokens = &mut session.turns.as_mut().unwrap()[0].tokens;
+    tokens.input_tokens -= 30;
+    tokens.cached_input_tokens = 20;
+    tokens.output_tokens = 30;
+    tokens.reasoning_output_tokens = 10;
+    session.tokens = TokenBreakdown::default();
+    for turn in session.turns.as_ref().unwrap() { session.tokens.add_assign(&turn.tokens); }
+    session
+}
+
+#[test]
+fn cloud_download_preserves_local_and_ssh_activity_when_unchanged_logs_are_skipped() {
+    use crate::cloud_store::{Download, merge};
+    use sha2::{Digest, Sha256};
+    let user = "00000000-0000-0000-0000-000000000001";
+    let key = format!("{:x}", Sha256::digest(format!("{user}:regression").as_bytes()));
+    for kind in ["local", "ssh"] {
+        let root = temp();
+        std::fs::create_dir(root.join("sessions")).unwrap();
+        std::fs::write(root.join("sessions/activity.jsonl"), activity_fixture()).unwrap();
+        let mut connection = db::open(&root.join("usage.sqlite3")).unwrap();
+        let source = if kind == "local" { "local" } else { "ssh-test" };
+        if kind == "local" {
+            crate::scanner::scan_local(&root, &mut connection, false).unwrap();
+        } else {
+            let session = parse_session(Cursor::new(activity_fixture()), source, "Remote", kind).unwrap();
+            db::save_sessions(&mut connection, &[session]).unwrap();
+        }
+        let activity = activity_rows(&connection);
+        assert_eq!(activity, vec![("effort".into(), "high".into(), 1), ("plugin".into(), "Browser".into(), 1), ("skill".into(), "frontend-craft".into(), 1)]);
+        let original = db::get_session(&connection, source, "regression").unwrap();
+        let incoming = corrected_cloud_copy(original.clone());
+        assert_eq!(incoming.tokens.total_tokens, original.tokens.total_tokens);
+        for _ in 0..2 {
+            merge(&mut connection, user, vec![Download { session_key: key.clone(), session: incoming.clone() }]).unwrap();
+            assert_eq!(db::get_session(&connection, source, "regression").unwrap().tokens, incoming.tokens);
+            assert_eq!(activity_rows(&connection), activity);
+        }
+        if kind == "local" {
+            assert!(crate::scanner::scan_local(&root, &mut connection, false).unwrap().sessions.is_empty());
+            assert_eq!(activity_rows(&connection), activity);
+        }
+        // An authoritative log scan may still remove activity that no longer exists.
+        db::save_sessions(&mut connection, &[incoming]).unwrap();
+        assert!(activity_rows(&connection).is_empty());
+    }
+}
+
+#[test]
+fn cloud_reconciliation_preserves_activity_when_a_download_later_becomes_local() {
+    use crate::cloud_store::{Download, merge, reconcile};
+    use sha2::{Digest, Sha256};
+    let root = temp();
+    let mut connection = db::open(&root.join("usage.sqlite3")).unwrap();
+    let user = "00000000-0000-0000-0000-000000000001";
+    let key = format!("{:x}", Sha256::digest(format!("{user}:regression").as_bytes()));
+    let local = parse_session(Cursor::new(activity_fixture()), "local", "Local", "local").unwrap();
+    let incoming = corrected_cloud_copy(local.clone());
+    merge(&mut connection, user, vec![Download { session_key: key, session: incoming.clone() }]).unwrap();
+    assert!(activity_rows(&connection).is_empty());
+    db::save_sessions(&mut connection, &[local]).unwrap();
+    let activity = activity_rows(&connection);
+    assert_eq!(activity.len(), 3);
+    reconcile(&mut connection).unwrap();
+    assert_eq!(activity_rows(&connection), activity);
+    assert_eq!(db::get_session(&connection, "local", "regression").unwrap().tokens, incoming.tokens);
+    assert_eq!(connection.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_writer_lock_and_python_match_rust_and_report_partial_lines() {
@@ -152,8 +233,9 @@ fn windows_writer_lock_and_python_match_rust_and_report_partial_lines() {
     assert!(!remote.scan_complete);
     assert_eq!(rows[1]["scanSummary"]["skippedFiles"],1);
     let script=format!("SINCE_ISO = ''\nCODEX_HOME = {}\n{}",serde_json::to_string(&root.to_string_lossy()).unwrap(),include_str!("remote_scan.py"));
-    let output=bounded_output(std::process::Command::new("python").arg("-"),script.into_bytes(),Duration::from_secs(20)).unwrap();
-    assert!(output.status.success());
+    let output=bounded_output(std::process::Command::new("python").arg("-").env("PYTHONIOENCODING", "cp1252"),script.into_bytes(),Duration::from_secs(20)).unwrap();
+    assert!(output.status.success(), "Python exited with {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    assert!(output.stdout.is_ascii());
     let text=String::from_utf8(output.stdout).unwrap();
     let python:SessionAggregate=serde_json::from_str(text.lines().next().unwrap()).unwrap();
     assert_eq!(python.tokens,remote.tokens);

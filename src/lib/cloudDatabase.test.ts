@@ -2,6 +2,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { readFileSync, readdirSync } from "node:fs";
 import { afterAll, beforeAll, expect, it } from "vitest";
+import { remoteFingerprint, type CloudSnapshot } from "./cloudSync";
 
 const pg=new PGlite();
 const first="00000000-0000-0000-0000-000000000001", second="00000000-0000-0000-0000-000000000002";
@@ -34,6 +35,35 @@ it("two source aliases of a session do not create two cloud totals",async () => 
   await upload(other);
   expect((await pg.query<{n:number}>("select count(*)::int n from usage_sessions")).rows[0].n).toBe(1);
   expect((await pg.query<{n:number}>("select count(*)::int n from usage_turns")).rows[0].n).toBe(121);
+});
+
+it("assigns a new download revision for equal-total token and turn-only corrections", async () => {
+  await account(first);
+  const value = snapshot(2, "e".repeat(64));
+  const download = async () => (await pg.query<{ data: CloudSnapshot }>(
+    "select get_usage_session_v3($1,$2) data", [value.row.source_key, value.row.session_key],
+  )).rows[0].data;
+  await upload(value);
+  const original = await download();
+  value.row.input_tokens -= 30;
+  value.row.cached_input_tokens = 20;
+  value.row.output_tokens = 30;
+  value.turns[0].input_tokens -= 30;
+  value.turns[0].cached_input_tokens = 20;
+  value.turns[0].output_tokens = 30;
+  expect((await upload(value)).rows[0].accepted).toBe(true);
+  const corrected = await download();
+  expect(corrected.session.total_tokens).toBe(original.session.total_tokens);
+  expect(corrected.session.observed_at).toBe(original.session.observed_at);
+  expect(corrected.session.sync_revision).toBeTruthy();
+  expect(remoteFingerprint(corrected.session)).not.toBe(remoteFingerprint(original.session));
+  value.turns[0].reasoning_effort = "medium";
+  await upload(value);
+  const turnCorrection = await download();
+  expect(turnCorrection.turns[0].reasoning_effort).toBe("medium");
+  expect(remoteFingerprint(turnCorrection.session)).not.toBe(remoteFingerprint(corrected.session));
+  await pg.exec("reset role");
+  await pg.query("delete from usage_sessions where user_id=$1 and session_key=$2", [first, value.row.session_key]);
 });
 it("invalid replacement rolls back and RLS isolates users",async () => {
   await account(first); const bad=snapshot(122); bad.turns[121].service_tier="invalid";
