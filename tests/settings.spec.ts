@@ -17,8 +17,7 @@ test("multiple SSH sources test independently and custom pricing survives save",
   await expect(page.getByLabel("example-server SSH Target")).toHaveValue("user@example-server");
   const ll1Source = page.locator("article").filter({ has: page.getByLabel("example-server SSH Target") });
   await page.getByRole("button", { name: "測試連線" }).first().click();
-  await expect(ll1Source.getByRole("status")).toContainText("正在連線");
-  await expect(ll1Source.getByRole("status")).toContainText("已透過系統 OpenSSH 連線");
+  await expect(ll1Source.getByRole("status")).toContainText("請在桌面版測試遠端連線。");
 
   await page.getByRole("button", { name: "保存設定" }).click();
   await expect(page.getByText("設定已保存，既有費用已重新計算")).toBeVisible();

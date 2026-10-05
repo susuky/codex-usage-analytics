@@ -67,6 +67,15 @@ try {
   await page.screenshot({path:join(root,'native-dashboard.png')});
   const native=await page.evaluate(async()=>window.__TAURI_INTERNALS__.invoke('get_overview',{filter:{days:365,project:'test-project'}}));
   if(native.totals.totalTokens!==1100 || native.todayTokens!==1100 || native.sessions.length!==1) throw new Error('Native scan totals are incorrect');
+  const dailyDate=native.daily[0].date;
+  const modelPanel=page.getByRole('region',{name:'模型用量排行'});
+  await modelPanel.getByLabel('模型分布日期').selectOption(dailyDate);
+  const dailyOverview=await page.evaluate(date=>window.__TAURI_INTERNALS__.invoke('get_overview',{filter:{days:30,startDate:date,endDate:date}}),dailyDate);
+  await expect(modelPanel.getByText(`${dailyOverview.totals.totalTokens.toLocaleString('en-US')} Tokens`,{exact:true}).first()).toBeVisible();
+  await expect(page.getByLabel('日期範圍')).toHaveValue('30');
+  await page.screenshot({path:join(root,'native-daily-models.png')});
+  await modelPanel.getByRole('button',{name:'返回整個區間'}).click();
+  await expect(modelPanel.getByLabel('模型分布日期')).toHaveValue('');
   await page.getByRole('button',{name:'重新掃描',exact:true}).click();
   await expect(page.getByRole('button',{name:'重新掃描',exact:true})).toBeEnabled({timeout:30_000});
   await page.getByRole('button',{name:'選擇日期區間',exact:true}).click();

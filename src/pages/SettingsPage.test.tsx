@@ -43,9 +43,14 @@ it("preserves a price draft during background updates and saves only that model"
   expect(saved.pricingRules.find(rule => rule.model === "gpt-5.6-terra")!.outputUsdPerMillion).toBe(50);
   expect(saved.codexHome).toBe("");
   expect(screen.getByLabelText("資料夾路徑（選填）")).toHaveValue("C:/my-codex");
+  expect(screen.getByText("尚有變更未保存")).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "保存設定" }));
   await screen.findByText("設定已保存，既有費用已重新計算");
   expect(saved.codexHome).toBe("C:/my-codex");
+  expect(screen.queryByText("尚有變更未保存")).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("資料夾路徑（選填）"), { target: { value: "C:/another-codex" } });
+  expect(screen.getByText("尚有變更未保存")).toBeVisible();
+  expect(screen.queryByText("設定已保存，既有費用已重新計算")).not.toBeInTheDocument();
 });
 
 it("keeps the current form usable when the official source cannot be reached", async () => {

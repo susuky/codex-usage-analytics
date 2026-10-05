@@ -1,14 +1,15 @@
 import { ArrowUpRight, Bot, CalendarClock, Coins, Gauge, MessagesSquare } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ModelDistribution } from "../components/ModelDistribution";
 import { PageHeader } from "../components/PageHeader";
 import { SessionTable } from "../components/SessionTable";
 import { UsageHealth } from "../components/UsageHealth";
 import { useUsageData } from "../lib/data";
-import { fillDailyDateRange, fillDailyRange } from "../lib/daily";
+import { dailyTokenTotal, fillDailyDateRange, fillDailyRange } from "../lib/daily";
 import { cacheRate, formatCost, formatDate, formatInteger, formatTokens } from "../lib/format";
+import type { UsageFilter } from "../types";
 import styles from "../components/Dashboard.module.css";
 
 const chartColors = { uncached: "#408CF4", cached: "#8056D9", cacheWrite: "#F2B75F", output: "#62DDBD", unclassified: "#9AA6A8" };
@@ -19,18 +20,22 @@ function Metric({ icon: Icon, label, value, hint }: { icon: typeof Coins; label:
 
 function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ name: string; value: number; color: string }>; label?: string }) {
   if (!active || !payload?.length) return null;
-  return <div className="chart-tooltip"><strong>{label}</strong>{payload.map((item) => <span key={item.name}><i style={{ background: item.color }} />{item.name}<b>{formatInteger(item.value)}</b></span>)}</div>;
+  const total = payload.reduce((sum, item) => sum + item.value, 0);
+  return <div className="chart-tooltip"><strong>{label}</strong>{payload.map((item) => <span key={item.name}><i style={{ background: item.color }} />{item.name}<b>{formatInteger(item.value)}</b></span>)}<span className="chart-tooltip-total">總 Tokens<b>{formatInteger(total)}</b></span></div>;
 }
 
 export function OverviewPage() {
   const { data, filter, loading, scanning, error, reload } = useUsageData();
   const [showDailyTable, setShowDailyTable] = useState(false);
+  const [selectedDay, setSelectedDay] = useState<{ date: string; filter: UsageFilter } | null>(null);
   const chartData = useMemo(
     () => filter.startDate && filter.endDate
       ? fillDailyDateRange(data?.daily ?? [], filter.startDate, filter.endDate)
       : fillDailyRange(data?.daily ?? [], filter.days),
     [data?.daily, filter.days, filter.startDate, filter.endDate]
   );
+  const selectedDate = selectedDay?.filter === filter && chartData.some(day => day.date === selectedDay.date) ? selectedDay.date : "";
+  const selectDate = (date: string) => setSelectedDay(date ? { date, filter } : null);
   if (loading && !data) return <div className={styles.page}><PageHeader title="用量總覽" /><div className="page-loading" role="status">正在載入使用紀錄…</div></div>;
   if (error && !data) return <div className={styles.page}><PageHeader title="用量總覽" /><div className={styles.empty}><h2>暫時無法顯示用量</h2><p>請重新載入；既有統計不會因此刪除。</p><button className="secondary-button" onClick={() => void reload()}>重新載入</button></div></div>;
   if (!data) return null;
@@ -54,13 +59,14 @@ export function OverviewPage() {
           <section className={styles.chartPanel}>
             <div className={styles.sectionHeading}><h2 className={styles.panelTitle}>每日 Token 趨勢</h2><Link to="/trends" className={styles.textLink}>查看趨勢<ArrowUpRight size={14} /></Link></div>
             <div className={styles.legend}><span><i style={{ background: chartColors.uncached }} />未快取輸入</span><span><i style={{ background: chartColors.cached }} />Cached input</span><span><i style={{ background: chartColors.cacheWrite }} />Cache writes</span><span><i style={{ background: chartColors.output }} />輸出</span><span><i style={{ background: chartColors.unclassified }} />未分類</span></div>
-            <div className="main-chart" aria-label={`每日 Token 趨勢，區間總計 ${formatInteger(data.totals.totalTokens)} Tokens；可展開每日明細查看數值。`}><ResponsiveContainer width="100%" height="100%"><BarChart data={chartData} barCategoryGap="24%" maxBarSize={56} margin={{ top: 16, right: 8, left: -14, bottom: 0 }}><CartesianGrid stroke="#2b343a" vertical={false} strokeDasharray="2 2" /><XAxis dataKey="date" tickFormatter={formatDate} tick={{ fill: "#9aa7ad", fontSize: 12 }} axisLine={{ stroke: "#354047" }} tickLine={false} /><YAxis tickFormatter={formatTokens} tick={{ fill: "#9aa7ad", fontSize: 12 }} axisLine={false} tickLine={false} /><Tooltip content={<ChartTooltip />} cursor={{ fill: "rgba(255,255,255,.035)" }} /><Bar name="未快取輸入" dataKey="uncachedInput" stackId="a" fill={chartColors.uncached} minPointSize={barMinimum("uncachedInput")} isAnimationActive={false} /><Bar name="Cached input" dataKey="cachedInput" stackId="a" fill={chartColors.cached} minPointSize={barMinimum("cachedInput")} isAnimationActive={false} /><Bar name="Cache writes" dataKey="cacheWriteInput" stackId="a" fill={chartColors.cacheWrite} minPointSize={barMinimum("cacheWriteInput")} isAnimationActive={false} /><Bar name="輸出" dataKey="output" stackId="a" fill={chartColors.output} minPointSize={barMinimum("output")} isAnimationActive={false} /><Bar name="未分類" dataKey="unclassified" stackId="a" fill={chartColors.unclassified} minPointSize={barMinimum("unclassified")} isAnimationActive={false} radius={[2,2,0,0]} /></BarChart></ResponsiveContainer></div>
+            <div className="main-chart" aria-label={`每日 Token 趨勢，區間總計 ${formatInteger(data.totals.totalTokens)} Tokens；點選日期可查看當天模型分布，也可使用模型分布日期選單。`}><ResponsiveContainer width="100%" height="100%"><BarChart data={chartData} barCategoryGap="24%" maxBarSize={56} margin={{ top: 16, right: 8, left: -14, bottom: 0 }} onClick={({ activeLabel }) => { if (typeof activeLabel === "string" && chartData.some(day => day.date === activeLabel)) selectDate(activeLabel); }}><CartesianGrid stroke="#2b343a" vertical={false} strokeDasharray="2 2" /><XAxis dataKey="date" tickFormatter={formatDate} tick={{ fill: "#9aa7ad", fontSize: 12 }} axisLine={{ stroke: "#354047" }} tickLine={false} /><YAxis tickFormatter={formatTokens} tick={{ fill: "#9aa7ad", fontSize: 12 }} axisLine={false} tickLine={false} />{selectedDate ? <ReferenceLine x={selectedDate} stroke={chartColors.output} strokeDasharray="4 4" /> : null}<Tooltip content={<ChartTooltip />} cursor={{ fill: "rgba(255,255,255,.035)" }} /><Bar name="未快取輸入" dataKey="uncachedInput" stackId="a" fill={chartColors.uncached} minPointSize={barMinimum("uncachedInput")} isAnimationActive={false} /><Bar name="Cached input" dataKey="cachedInput" stackId="a" fill={chartColors.cached} minPointSize={barMinimum("cachedInput")} isAnimationActive={false} /><Bar name="Cache writes" dataKey="cacheWriteInput" stackId="a" fill={chartColors.cacheWrite} minPointSize={barMinimum("cacheWriteInput")} isAnimationActive={false} /><Bar name="輸出" dataKey="output" stackId="a" fill={chartColors.output} minPointSize={barMinimum("output")} isAnimationActive={false} /><Bar name="未分類" dataKey="unclassified" stackId="a" fill={chartColors.unclassified} minPointSize={barMinimum("unclassified")} isAnimationActive={false} radius={[2,2,0,0]} /></BarChart></ResponsiveContainer></div>
+            <p className={styles.sectionHint}>點選柱狀圖，查看當天的模型分布。</p>
           </section>
-          <ModelDistribution models={data.models} total={data.totals.totalTokens} />
+          <ModelDistribution date={selectedDate} dates={chartData.map(day => day.date)} onDateChange={selectDate} />
         </div>
         <UsageHealth data={data} scanning={scanning} />
         <button className={styles.disclosureButton} aria-expanded={showDailyTable} aria-controls="daily-usage-table" onClick={() => setShowDailyTable(value => !value)}>{showDailyTable ? "收合每日明細" : "查看每日明細"}</button>
-        {showDailyTable ? <section id="daily-usage-table" className={styles.tablePanel}><h2 className={styles.tableTitle}>每日用量明細</h2><div className={styles.dailyTableScroll} tabIndex={0} aria-label="每日用量明細"><table className={styles.table}><thead><tr>{["日期", "未快取輸入", "Cached input", "Cache writes", "輸出", "未分類"].map(label => <th key={label} scope="col">{label}</th>)}</tr></thead><tbody>{chartData.map(day => <tr key={day.date}><td>{day.date}</td>{[day.uncachedInput, day.cachedInput, day.cacheWriteInput, day.output, day.unclassified].map((value, index) => <td key={index}>{formatInteger(value)}</td>)}</tr>)}</tbody></table></div></section> : null}
+        {showDailyTable ? <section id="daily-usage-table" className={styles.tablePanel}><h2 className={styles.tableTitle}>每日用量明細</h2><div className={styles.dailyTableScroll} tabIndex={0} aria-label="每日用量明細"><table className={styles.table}><thead><tr>{["日期", "未快取輸入", "Cached input", "Cache writes", "輸出", "未分類", "總 Tokens"].map(label => <th key={label} scope="col">{label}</th>)}</tr></thead><tbody>{chartData.map(day => <tr key={day.date}><td><button className={styles.dailyDateButton} aria-label={`查看 ${day.date} 模型分布`} aria-pressed={selectedDate === day.date} onClick={() => selectDate(day.date)}>{day.date}</button></td>{[day.uncachedInput, day.cachedInput, day.cacheWriteInput, day.output, day.unclassified, dailyTokenTotal(day)].map((value, index) => <td key={index} className={index === 5 ? styles.accent : undefined}>{formatInteger(value)}</td>)}</tr>)}</tbody></table></div></section> : null}
         <section className={styles.tablePanel}><div className={styles.sectionHeading}><h2 className={styles.tableTitle}>最近 Sessions</h2><Link to="/sessions" className={styles.textLink}>查看全部<ArrowUpRight size={14} /></Link></div>{data.sessions.length ? <SessionTable sessions={data.sessions} limit={6} /> : <div className={styles.empty}>此區間尚無使用紀錄，請調整日期或掃描資料來源。</div>}</section>
         <p className="footnote">Cached input 與 Cache writes 已包含在 Input 中，不會重複計入總量。API 等值估算不代表 Codex 訂閱帳單。</p>
       </div>

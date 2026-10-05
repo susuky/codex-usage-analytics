@@ -1,5 +1,5 @@
-import { useState, type MouseEvent, type ReactNode } from "react";
-import { NavLink } from "react-router-dom";
+import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
+import { NavLink, useLocation } from "react-router-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Activity, BarChart3, Box, ChartNoAxesCombined, PanelLeftClose, PanelLeftOpen, CircleGauge, Minus, RefreshCw, Settings, Square, TerminalSquare, X } from "lucide-react";
 import styles from "./AppShell.module.css";
@@ -35,6 +35,11 @@ function handleTitlebarMouseDown(event: MouseEvent<HTMLElement>) {
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    const title = pathname.startsWith("/sessions/") ? "Session 明細" : navigation.find(item => item.to === pathname)?.label;
+    document.title = title ? `${title} · Codex 用量分析` : "Codex 用量分析";
+  }, [pathname]);
   const [collapsed, setCollapsed] = useState(loadSidebarCollapsed);
   const toggleSidebar = () => {
     saveSidebarCollapsed(!collapsed);
@@ -46,11 +51,11 @@ export function AppShell({ children }: { children: ReactNode }) {
       <header className={styles.titlebar} data-tauri-drag-region onMouseDown={handleTitlebarMouseDown}>
         <div className={styles.brandMark} data-tauri-drag-region><TerminalSquare size={20} strokeWidth={1.8} /></div>
         <span data-tauri-drag-region>Codex 用量分析</span>
-        <div className={styles.windowControls}>
+        {isTauri() ? <div className={styles.windowControls}>
           <button type="button" aria-label="最小化視窗" onClick={() => runWindowAction("minimize")}><Minus size={15} strokeWidth={1.4} /></button>
           <button type="button" aria-label="最大化或還原視窗" onClick={() => runWindowAction("toggleMaximize")}><Square size={12} strokeWidth={1.35} /></button>
           <button type="button" aria-label="關閉視窗" className={styles.closeButton} onClick={() => runWindowAction("close")}><X size={16} strokeWidth={1.35} /></button>
-        </div>
+        </div> : <span className={styles.previewLabel}>範例資料</span>}
       </header>
       <div className={`${styles.body} ${collapsed ? styles.collapsed : ""}`}>
         <aside className={styles.sidebar}>

@@ -105,9 +105,10 @@ test("models show per-model Thinking records and official legacy pricing", async
   await expect(page.getByLabel("gpt-5.3-codex input 價格")).toHaveValue("1.75");
 });
 
-test("custom title bar exposes real window controls", async ({ page }) => {
+test("browser preview identifies sample data and only offers working controls", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "最小化視窗" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "最大化或還原視窗" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "關閉視窗" })).toBeVisible();
+  await expect(page.getByText("範例資料", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "最小化視窗" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "最大化或還原視窗" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "關閉視窗" })).toHaveCount(0);
 });

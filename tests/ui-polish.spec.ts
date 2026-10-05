@@ -102,6 +102,38 @@ test("a zero-usage day has no visible bars", async ({ page }) => {
   expect(heights.every(height => height === 0)).toBe(true);
 });
 
+test("models provide an empty-range recovery and a link to matching Sessions", async ({ page }) => {
+  await page.goto("/models");
+  await page.getByRole("link", { name: "查看 gpt-5.6-sol 的 Sessions" }).click();
+  await expect(page.getByRole("combobox", { name: "模型", exact: true })).toHaveValue("gpt-5.6-sol");
+  await page.getByRole("link", { name: "模型", exact: true }).click();
+  await expect(page.getByRole("region", { name: "模型用量比較" })).toHaveAttribute("tabindex", "0");
+  await page.getByRole("button", { name: "選擇日期區間" }).click();
+  await page.getByLabel("開始日期").fill("2020-01-01");
+  await page.getByLabel("結束日期").fill("2020-01-03");
+  await page.getByRole("button", { name: "套用", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "此區間尚無模型用量" })).toBeVisible();
+  await page.getByRole("link", { name: "查看資料來源", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "資料來源", exact: true })).toBeVisible();
+});
+
+test("narrow Session rows show tokens and costs without horizontal scrolling", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/sessions");
+  const region = page.getByRole("region", { name: "Session 使用紀錄" });
+  await expect(region.getByRole("row").nth(1)).toBeVisible();
+  expect(await region.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const row = region.getByRole("row").nth(1);
+  const project = await row.getByRole("link").boundingBox();
+  const cost = await row.getByRole("cell").nth(5).boundingBox();
+  const tokens = await row.getByRole("cell").nth(4).boundingBox();
+  expect(project!.y).toBeLessThan(tokens!.y);
+  expect(cost!.x + cost!.width).toBeLessThanOrEqual(375);
+  expect(tokens!.x + tokens!.width).toBeLessThanOrEqual(375);
+  await region.getByRole("button", { name: "Tokens", exact: true }).click();
+  await expect(region.getByRole("columnheader", { name: "Tokens", exact: true })).toHaveAttribute("aria-sort", "ascending");
+});
+
 test("settings navigation keeps labeled pricing fields inside the viewport", async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
   await page.goto("/settings");

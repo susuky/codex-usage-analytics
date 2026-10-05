@@ -1,0 +1,72 @@
+import { expect, test } from "@playwright/test";
+
+test("tooltip totals match the stack and a chart click selects that day's model distribution", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("日期範圍").selectOption("30");
+  await expect(page.getByRole("button", { name: "重新掃描", exact: true })).toBeEnabled();
+  const summary = page.getByRole("region", { name: "用量摘要" });
+  const originalSummary = await summary.textContent();
+  const bars = page.locator(".recharts-bar-rectangle path");
+  const visibleIndex = await bars.evaluateAll(nodes => nodes.findIndex(node => node.getBoundingClientRect().height > 5));
+  expect(visibleIndex).toBeGreaterThanOrEqual(0);
+  await bars.nth(visibleIndex).hover();
+  const tooltip = page.locator(".chart-tooltip");
+  await expect(tooltip).toBeVisible();
+  await expect(tooltip.locator(":scope > strong")).toHaveText(/^\d{4}-\d{2}-\d{2}$/);
+  const date = await tooltip.locator(":scope > strong").textContent();
+  const parts = await tooltip.locator("span:not(.chart-tooltip-total) b").allTextContents();
+  const total = parts.reduce((sum, value) => sum + Number(value.replaceAll(",", "")), 0);
+  await expect(tooltip.locator(".chart-tooltip-total b")).toHaveText(total.toLocaleString("en-US"));
+  await bars.nth(visibleIndex).click();
+  const panel = page.getByRole("region", { name: "模型用量排行" });
+  await expect(panel.getByLabel("模型分布日期")).toHaveValue(date!);
+  await expect(panel.getByText(`${total.toLocaleString("en-US")} Tokens`, { exact: true })).toBeVisible();
+  await bars.nth(visibleIndex).hover();
+  await expect(tooltip).toBeVisible();
+  await expect(tooltip.locator(":scope > strong")).toHaveText(date!);
+  await expect(summary).toHaveText(originalSummary ?? "");
+  await panel.getByRole("button", { name: "返回整個區間" }).click();
+  await expect(panel.getByLabel("模型分布日期")).toHaveValue("");
+  await expect(page.getByLabel("日期範圍")).toHaveValue("30");
+});
+
+test("daily totals, keyboard date selection, empty days and interval changes stay consistent", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("日期範圍").selectOption("7");
+  await page.getByRole("button", { name: "查看每日明細" }).click();
+  const table = page.locator("#daily-usage-table");
+  await expect(table.getByRole("columnheader", { name: "總 Tokens", exact: true })).toBeVisible();
+  const firstRow = table.locator("tbody tr").first();
+  const cells = await firstRow.locator("td").allTextContents();
+  expect(Number(cells[6].replaceAll(",", ""))).toBe(cells.slice(1, 6).reduce((sum, value) => sum + Number(value.replaceAll(",", "")), 0));
+  await firstRow.getByRole("button").focus();
+  await page.keyboard.press("Enter");
+  const date = page.getByLabel("模型分布日期", { exact: true });
+  await expect(date).toHaveValue(cells[0]);
+  await page.getByLabel("日期範圍").selectOption("30");
+  await expect(date).toHaveValue("");
+  await date.focus();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(date).not.toHaveValue("");
+  await expect(page.getByText("這一天沒有模型用量")).toBeVisible();
+  await page.getByRole("button", { name: "返回整個區間" }).click();
+  await expect(date).toHaveValue("");
+});
+
+test("opening a model's Sessions carries the selected day into the destination", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("日期範圍").selectOption("7");
+  const panel = page.getByRole("region", { name: "模型用量排行" });
+  const date = await panel.getByLabel("模型分布日期").locator("option").last().getAttribute("value");
+  await panel.getByLabel("模型分布日期").selectOption(date!);
+  const modelLink = panel.getByRole("link", { name: /的 Sessions$/ }).first();
+  await expect(modelLink).toBeVisible();
+  const model = await modelLink.textContent();
+  await modelLink.click();
+  await expect(page.getByRole("combobox", { name: "模型", exact: true })).toHaveValue(model!);
+  await expect(page.getByLabel("日期範圍")).toHaveValue("custom");
+  await page.getByRole("button", { name: "選擇日期區間" }).click();
+  await expect(page.getByLabel("開始日期")).toHaveValue(date!);
+  await expect(page.getByLabel("結束日期")).toHaveValue(date!);
+});

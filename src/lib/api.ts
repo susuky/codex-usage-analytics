@@ -45,8 +45,7 @@ export async function mergeCloudSessions(userId: string, sessions: Array<{ sessi
 
 export async function testSshSource(target: string, codexHome = ""): Promise<string> {
   if (!isTauri()) {
-    await new Promise((resolve) => setTimeout(resolve, 450));
-    return target === "user@example-server" ? "已透過系統 OpenSSH 連線" : "瀏覽器預覽未執行 SSH";
+    throw new Error("請在桌面版測試遠端連線。");
   }
   return invoke<string>("test_ssh_source", { target, codexHome });
 }

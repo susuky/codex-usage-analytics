@@ -42,6 +42,7 @@
 .windowControls button { width: 46px; height: 100%; display: grid; place-items: center; padding: 0; border: 0; color: #9aa5a8; background: transparent; cursor: default; }
 .windowControls button:hover { color: #edf3f1; background: #1b242a; }
 .windowControls .closeButton:hover { color: #fff; background: #c42b1c; }
+.previewLabel { margin-left: auto; color: var(--muted); font-size: 12px; font-weight: 400; }
 
 .body { display: grid; grid-template-columns: 196px minmax(0, 1fr); min-height: calc(100vh - 48px); }
 

@@ -10,11 +10,13 @@ import styles from "../components/Dashboard.module.css";
 
 type StatusMessage = { kind: "success" | "error" | "pending"; text: string };
 const cloneDefaults = () => defaultPricingRules.map((rule) => ({ ...rule }));
+const generalSettingsKey = (settings: AppSettings) => JSON.stringify([settings.codexHome, settings.sshSources, settings.cloudEnabled]);
 
 export default function SettingsPage() {
   const { data } = useUsageData();
   const { status, sendMagicLink, signOut, deleteCloudData } = useCloud();
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [savedGeneral, setSavedGeneral] = useState("");
   const [email, setEmail] = useState("");
   const [sshStatuses, setSshStatuses] = useState<Record<string, StatusMessage>>({});
   const [saveStatus, setSaveStatus] = useState<StatusMessage | null>(null);
@@ -32,6 +34,7 @@ export default function SettingsPage() {
     const [latest, status] = await Promise.all([getSettings(), getPricingStatus()]);
     if (request !== pricingRequest.current) return;
     basePricing.current = latest.pricingRules;
+    setSavedGeneral(generalSettingsKey(latest));
     setPricingStatus(status);
     setSettings(current => current ? { ...current, pricingRules: latest.pricingRules } : latest);
   }, []);
@@ -43,6 +46,8 @@ export default function SettingsPage() {
     return () => window.removeEventListener("usage-pricing-updated", load);
   }, [loadPricing]);
   if (!settings) return <div className="page-loading" role="status">{saveStatus?.text ?? "載入設定…"}</div>;
+  const hasGeneralChanges = generalSettingsKey(settings) !== savedGeneral;
+  const saveFeedback = hasGeneralChanges && saveStatus?.text === "設定已保存，既有費用已重新計算" ? null : saveStatus;
 
   const save = async () => {
     setSaving(true);
@@ -129,7 +134,7 @@ export default function SettingsPage() {
     <section id="local-settings" className="settings-section"><h2>本機 Codex</h2><p className="section-description">自動讀取這台電腦的使用紀錄，也可以指定其他資料夾。</p><label><span>資料夾路徑（選填）</span><input value={settings.codexHome} onChange={(event) => setSettings({ ...settings, codexHome: event.target.value })} placeholder="留空以自動偵測" /></label></section>
     <section id="remote-settings" className="settings-section"><div className="section-title-row"><div><h2>SSH 遠端來源</h2><p>新增 Windows、Linux 或 macOS 裝置，沿用現有 SSH 連線設定。</p></div><button className="secondary-button" onClick={addSsh}><Plus size={15} />新增主機</button></div><div className="ssh-source-editor">{settings.sshSources.map((source, index) => <article className="ssh-source-row" key={source.id}><label className="ssh-enabled"><input aria-label={`${source.name} 啟用`} type="checkbox" checked={source.enabled} onChange={(event) => updateSsh(index, { enabled: event.target.checked })} /><span>啟用</span></label><label><span>顯示名稱</span><input aria-label={`SSH 來源 ${index + 1} 名稱`} value={source.name} onChange={(event) => updateSsh(index, { name: event.target.value })} /></label><label><span>SSH Target</span><input aria-label={`${source.name} SSH Target`} value={source.target} placeholder="user@host" onChange={(event) => updateSsh(index, { target: event.target.value })} /></label><div className="ssh-source-actions"><button className="secondary-button" disabled={testingSsh[source.id] || !source.target} onClick={() => void test(source)}>{testingSsh[source.id] ? <LoaderCircle className={styles.spin} size={16} /> : <KeyRound size={16} />}{testingSsh[source.id] ? "測試中…" : "測試連線"}</button><button className="icon-danger-button" aria-label={`刪除 SSH 來源 ${source.name}`} onClick={() => removeSsh(index)}><Trash2 size={16} /></button></div><label className="ssh-home-field"><span>遠端 CODEX_HOME（選填）</span><input aria-label={`${source.name} 遠端 CODEX_HOME`} value={source.codexHome ?? ""} placeholder="留空以自動偵測" onChange={(event) => updateSsh(index, { codexHome: event.target.value })} /></label>{sshStatuses[source.id] ? <span className={`inline-status ${sshStatuses[source.id].kind}`} role="status">{sshStatuses[source.id].text}</span> : null}</article>)}</div></section>
     <section id="cloud-settings" className="settings-section"><h2>雲端同步</h2><p className="section-description">{status.configured ? "使用 Email 登入，跨裝置保留使用紀錄。" : "尚未設定雲端服務。本機與 SSH 分析不受影響。"}</p>{status.signedIn ? <div className="signed-row"><span>已登入 {status.email}</span><button className="secondary-button" onClick={() => void signOut()}>登出</button></div> : <div className="magic-row"><label><span className="field-label">Email</span><input aria-label="登入 Email" autoComplete="email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" /></label><button className="primary-button" disabled={!email || !status.configured} onClick={() => void login()}>寄送 Magic Link</button></div>}<label className="toggle-row"><span><strong>同步去識別化統計</strong><small>不包含原始對話或完整路徑</small></span><input type="checkbox" checked={settings.cloudEnabled} onChange={(event) => setSettings({ ...settings, cloudEnabled: event.target.checked })} /></label><button className="danger-button" disabled={!status.signedIn} onClick={() => void clearCloud()}><Trash2 size={16} />清除雲端統計</button></section>
-    <div className="settings-footer"><button className="primary-button" disabled={saving || refreshingPrices || pricingBusy} onClick={() => void save()}>{saving ? <LoaderCircle className={styles.spin} size={16} /> : <Save size={16} />}{saving ? "保存中…" : "保存設定"}</button>{saveStatus ? <span className={`inline-status ${saveStatus.kind}`} role="status">{saveStatus.text}</span> : null}</div>
+    <div className="settings-footer"><div className="settings-save-summary" role="status" aria-atomic="true"><strong className={hasGeneralChanges ? "state-pending" : undefined}>{hasGeneralChanges ? "尚有變更未保存" : "來源與同步設定"}</strong><small>模型價格會個別保存</small></div>{saveFeedback ? <span className={`inline-status ${saveFeedback.kind}`} role="status">{saveFeedback.text}</span> : null}<button className="primary-button" disabled={saving || refreshingPrices || pricingBusy} onClick={() => void save()}>{saving ? <LoaderCircle className={styles.spin} size={16} /> : <Save size={16} />}{saving ? "保存中…" : "保存設定"}</button></div>
     <section id="pricing-settings" className="settings-section">
       <div className="section-title-row pricing-title"><div><h2>API 等值價格</h2><p>美元／每百萬 Tokens · API 等值估算，非訂閱帳單</p></div><button className="secondary-button" disabled={refreshingPrices || saving || pricingBusy} onClick={() => void refreshPrices()}><RefreshCw size={15} className={refreshingPrices ? styles.spin : undefined} />{refreshingPrices ? "更新中…" : "更新官方價格"}</button></div>
       <div className="pricing-update-line">
