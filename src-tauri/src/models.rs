@@ -271,6 +271,6 @@ pub struct SshSourceConfig {
 
 impl Default for AppSettings {
     fn default() -> Self {
-        Self { codex_home: String::new(), ssh_target: "user@example-server".into(), ssh_enabled: true, ssh_sources: vec![SshSourceConfig { id: "ssh-example-server".into(), name: "example-server".into(), target: "user@example-server".into(), codex_home: String::new(), enabled: true }], cloud_enabled: true, poll_minutes: 15, pricing_rules: default_pricing_rules(), auto_update_pricing: true }
+        Self { codex_home: String::new(), ssh_target: String::new(), ssh_enabled: false, ssh_sources: Vec::new(), cloud_enabled: true, poll_minutes: 15, pricing_rules: default_pricing_rules(), auto_update_pricing: true }
     }
 }

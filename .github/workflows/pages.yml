@@ -1,8 +1,5 @@
 name: Deploy auth callback
 on:
-  push:
-    branches: [main]
-    paths: ["auth-callback/**"]
   workflow_dispatch:
 permissions: { contents: read, pages: write, id-token: write }
 jobs:

@@ -61,9 +61,9 @@ export const defaultPricingRules: PricingRule[] = [
 
 const defaultSettings: AppSettings = {
   codexHome: "",
-  sshTarget: "user@example-server",
-  sshEnabled: true,
-  sshSources: [{ id: "ssh-example-server", name: "example-server", target: "user@example-server", codexHome: "", enabled: true }],
+  sshTarget: "",
+  sshEnabled: false,
+  sshSources: [],
   cloudEnabled: true,
   pollMinutes: 15,
   pricingRules: defaultPricingRules,

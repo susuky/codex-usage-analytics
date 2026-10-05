@@ -61,6 +61,28 @@ fn imported_older_copies_are_quiet_but_conflicting_or_incomplete_snapshots_warn(
     assert_eq!(saved.turns.unwrap().len(), 4);
 }
 #[test]
+fn fresh_settings_have_no_remote_and_saved_sources_survive_loading() {
+    let root = temp();
+    let connection = db::open(&root.join("usage.sqlite3")).unwrap();
+    let mut settings = db::load_settings(&connection).unwrap();
+    assert!(settings.ssh_target.is_empty());
+    assert!(!settings.ssh_enabled);
+    assert!(settings.ssh_sources.is_empty());
+    settings.ssh_sources.push(SshSourceConfig { id: "ssh-personal".into(), name: "My server".into(), target: "user@my-server".into(), codex_home: "/data/codex".into(), enabled: true });
+    db::save_settings(&connection, &settings).unwrap();
+    let saved = db::load_settings(&connection).unwrap();
+    assert_eq!(saved.ssh_sources.len(), 1);
+    assert_eq!(saved.ssh_sources[0].target, "user@my-server");
+    assert_eq!(saved.ssh_sources[0].codex_home, "/data/codex");
+
+    let legacy = json!({ "codexHome": "", "sshTarget": "user@old-server", "sshEnabled": true, "cloudEnabled": false, "pollMinutes": 15 });
+    connection.execute("UPDATE settings SET value=?1 WHERE key='app'", [legacy.to_string()]).unwrap();
+    let migrated = db::load_settings(&connection).unwrap();
+    assert_eq!(migrated.ssh_sources[0].target, "user@old-server");
+    assert!(migrated.ssh_sources[0].enabled);
+}
+
+#[test]
 fn startup_and_zero_price_and_cloud_queue_survive_reopening() {
     let root=temp(); let path=root.join("usage.sqlite3"); let connection=db::open(&path).unwrap();
     let mut source=UsageSource { id:"ssh-test".into(),name:"Test".into(),kind:"ssh".into(),target:None,enabled:false,stale:true,last_scanned_at:Some("2026-09-05T00:00:00Z".into()),last_error:Some("offline".into()),session_count:0,latest_data_at:None };

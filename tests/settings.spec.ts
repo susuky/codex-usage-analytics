@@ -10,14 +10,18 @@ test("overview explains activity and deduplicated token totals", async ({ page }
 
 test("multiple SSH sources test independently and custom pricing survives save", async ({ page }) => {
   await page.goto("/settings");
+  await expect(page.getByRole("button", { name: "測試連線" })).toHaveCount(0);
+  await page.getByRole("button", { name: "新增主機" }).click();
+  await page.getByLabel("SSH 來源 1 名稱").fill("dev-server");
+  await page.getByLabel("dev-server SSH Target").fill("user@dev-server");
   await page.getByRole("button", { name: "新增主機" }).click();
   await page.getByLabel("SSH 來源 2 名稱").fill("gpu-2");
   await page.getByLabel("gpu-2 SSH Target").fill("user@gpu-2");
   await page.getByLabel("gpu-2 遠端 CODEX_HOME").fill("/home/user/.codex-alt");
-  await expect(page.getByLabel("example-server SSH Target")).toHaveValue("user@example-server");
-  const ll1Source = page.locator("article").filter({ has: page.getByLabel("example-server SSH Target") });
+  await expect(page.getByLabel("dev-server SSH Target")).toHaveValue("user@dev-server");
+  const firstSource = page.locator("article").filter({ has: page.getByLabel("dev-server SSH Target") });
   await page.getByRole("button", { name: "測試連線" }).first().click();
-  await expect(ll1Source.getByRole("status")).toContainText("請在桌面版測試遠端連線。");
+  await expect(firstSource.getByRole("status")).toContainText("請在桌面版測試遠端連線。");
 
   await page.getByRole("button", { name: "保存設定" }).click();
   await expect(page.getByText("設定已保存，既有費用已重新計算")).toBeVisible();
@@ -32,6 +36,8 @@ test("multiple SSH sources test independently and custom pricing survives save",
   await expect(page.getByText("codex-auto-review 的價格已保存。")).toBeVisible();
 
   await page.reload();
+  await expect(page.getByLabel("dev-server SSH Target")).toHaveValue("user@dev-server");
+  await expect(page.getByLabel("gpu-2 SSH Target")).toHaveValue("user@gpu-2");
   await page.getByRole("button", { name: "編輯 codex-auto-review 價格" }).click();
   await expect(page.locator('input[value="codex-auto-review"]')).toBeVisible();
   await expect(page.getByLabel("codex-auto-review output 價格")).toHaveValue("6");
