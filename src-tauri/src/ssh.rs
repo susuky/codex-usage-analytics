@@ -477,6 +477,9 @@ mod tests {
         use std::{io::Write, process::Stdio, time::{Duration, Instant}};
         let script = "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n[Console]::Out.WriteLine('{\"scanSummary\":{\"skippedFiles\":0},\"label\":\"完成\"}')";
         let command = windows_script_command(script.len());
+        // Match the other PowerShell regression test's cold-start budget on CI.
+        let timeout = Duration::from_secs(45);
+        let started = Instant::now();
         let mut child = Command::new("powershell.exe")
             .args(command.split_whitespace().skip(1))
             .creation_flags(0x0800_0000)
@@ -484,16 +487,18 @@ mod tests {
         let mut input = child.stdin.take().unwrap();
         input.write_all(script.as_bytes()).unwrap();
         // Keep stdin OPEN, reproducing the EOF behavior of nested Windows SSH.
-        let started = Instant::now();
         let status = loop {
             if let Some(status) = child.try_wait().unwrap() { break Some(status); }
-            if started.elapsed() > Duration::from_secs(5) { break None; }
+            if started.elapsed() >= timeout { break None; }
             std::thread::sleep(Duration::from_millis(20));
         };
+        let elapsed = started.elapsed();
         if status.is_none() { let _ = child.kill(); }
         drop(input);
         let output = child.wait_with_output().unwrap();
-        assert!(status.is_some_and(|status| status.success()), "Script waited for stdin EOF or failed: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(status.is_some_and(|status| status.success()),
+            "PowerShell did not finish successfully with stdin open: timed_out={}, elapsed={elapsed:?}, timeout={timeout:?}, status={}, stdout={}, stderr={}",
+            status.is_none(), output.status, String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
         let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(value["label"], "完成");
         assert_eq!(value["scanSummary"]["skippedFiles"], 0);
