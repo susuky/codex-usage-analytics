@@ -49,3 +49,14 @@ pnpm tauri dev     # 桌面開發模式，讀取實際來源
 ```
 
 [開發指南](CONTRIBUTING.md) 包含目錄結構、測試與建置方式；[版本紀錄](CHANGELOG.md) 記錄使用者可見的變更。
+
+## Copyright
+
+Third-party dependencies retain their respective licenses.
+
+```less
+Copyright © 2026 Hao-Ping Lin (@susuky). All rights reserved.
+
+This repository is publicly accessible for viewing and evaluation only.
+No license is granted to use, copy, modify, redistribute, sublicense, or use this software commercially without prior written permission.
+```
