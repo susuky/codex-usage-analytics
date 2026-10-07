@@ -26,21 +26,21 @@ test("multiple SSH sources test independently and custom pricing survives save",
   await page.getByRole("button", { name: "保存設定" }).click();
   await expect(page.getByText("設定已保存，既有費用已重新計算")).toBeVisible();
   await page.getByRole("button", { name: "新增自訂價格" }).click();
-  const modelInput = page.getByPlaceholder("例如 codex-auto-review").last();
-  await modelInput.fill("codex-auto-review");
-  await page.getByLabel("codex-auto-review input 價格").fill("1.5");
-  await page.getByLabel("codex-auto-review cached input 價格").fill("0.15");
-  await page.getByLabel("codex-auto-review cache writes 價格").fill("1.88");
-  await page.getByLabel("codex-auto-review output 價格").fill("6");
+  const modelInput = page.getByPlaceholder("例如 my-model").last();
+  await modelInput.fill("custom-review-model");
+  await page.getByLabel("custom-review-model input 價格").fill("1.5");
+  await page.getByLabel("custom-review-model cached input 價格").fill("0.15");
+  await page.getByLabel("custom-review-model cache writes 價格").fill("1.88");
+  await page.getByLabel("custom-review-model output 價格").fill("6");
   await page.getByRole("button", { name: "保存價格" }).click();
-  await expect(page.getByText("codex-auto-review 的價格已保存。")).toBeVisible();
+  await expect(page.getByText("custom-review-model 的價格已保存。")).toBeVisible();
 
   await page.reload();
   await expect(page.getByLabel("dev-server SSH Target")).toHaveValue("user@dev-server");
   await expect(page.getByLabel("gpu-2 SSH Target")).toHaveValue("user@gpu-2");
-  await page.getByRole("button", { name: "編輯 codex-auto-review 價格" }).click();
-  await expect(page.locator('input[value="codex-auto-review"]')).toBeVisible();
-  await expect(page.getByLabel("codex-auto-review output 價格")).toHaveValue("6");
+  await page.getByRole("button", { name: "編輯 custom-review-model 價格" }).click();
+  await expect(page.locator('input[value="custom-review-model"]')).toBeVisible();
+  await expect(page.getByLabel("custom-review-model output 價格")).toHaveValue("6");
 });
 
 test("sync page distinguishes scan time from latest source data and runs a full scan", async ({ page }) => {

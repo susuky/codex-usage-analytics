@@ -1,6 +1,15 @@
-use crate::models::{PricingRule, SessionAggregate, TokenBreakdown};
+use crate::models::{non_billable_pricing_rule, PricingRule, SessionAggregate, TokenBreakdown};
 #[cfg(test)]
 use crate::models::default_pricing_rules;
+
+pub fn is_non_billable_model(model: &str) -> bool {
+    model.trim().eq_ignore_ascii_case("codex-auto-review")
+}
+
+pub fn apply_non_billable_pricing(rules: &mut Vec<PricingRule>) {
+    rules.retain(|rule| !is_non_billable_model(&rule.model));
+    rules.push(non_billable_pricing_rule());
+}
 
 pub fn validate_rule(rule: &PricingRule) -> Result<(), String> {
     let rates = [rule.input_usd_per_million, rule.cached_usd_per_million, rule.cache_write_usd_per_million,
@@ -40,6 +49,8 @@ pub fn estimate_with_rules(model: &str, tokens: &TokenBreakdown, rules: &[Pricin
 }
 
 pub fn estimate_with_rules_for_tier(model: &str, tokens: &TokenBreakdown, service_tier: &str, rules: &[PricingRule]) -> Option<i64> {
+    // Keep review usage recorded even when prices or token breakdowns are missing.
+    if is_non_billable_model(model) { return Some(0); }
     if tokens.total_tokens > tokens.input_tokens + tokens.output_tokens {
         return None;
     }
@@ -126,7 +137,7 @@ mod tests {
 
     #[test]
     fn unknown_model_is_unpriced() {
-        assert_eq!(estimate_microusd("codex-auto-review", &TokenBreakdown::default()), None);
+        assert_eq!(estimate_microusd("unknown-model", &TokenBreakdown::default()), None);
     }
 
     #[test]
@@ -185,12 +196,28 @@ mod tests {
     #[test]
     fn custom_model_rule_is_used() {
         let mut rule = default_pricing_rules().remove(0);
-        rule.model = "codex-auto-review".into();
+        rule.model = "custom-review-model".into();
         rule.input_usd_per_million = 1.5;
         rule.cached_usd_per_million = 0.15;
         rule.output_usd_per_million = 6.0;
         let usage = TokenBreakdown { input_tokens: 100_000, cached_input_tokens: 80_000, cache_write_input_tokens: 0, output_tokens: 10_000, reasoning_output_tokens: 2_000, total_tokens: 110_000 };
-        assert_eq!(estimate_with_rules("codex-auto-review", &usage, &[rule]), Some(102_000));
+        assert_eq!(estimate_with_rules("custom-review-model", &usage, &[rule]), Some(102_000));
+    }
+
+    #[test]
+    fn auto_review_is_non_billable_with_any_prices_tier_or_token_breakdown() {
+        let mut rule = default_pricing_rules().remove(0);
+        rule.model = "codex-auto-review".into();
+        rule.unavailable_rates = vec!["cached".into(), "cacheWrite".into(), "fast".into(), "longFast".into()];
+        let full = TokenBreakdown { input_tokens: 300_000, cached_input_tokens: 80_000, cache_write_input_tokens: 10_000, output_tokens: 10_000, reasoning_output_tokens: 2_000, total_tokens: 310_000 };
+        for usage in [full, TokenBreakdown { total_tokens: 48_395, ..TokenBreakdown::default() }] {
+            for model in ["codex-auto-review", " CODEX-AUTO-REVIEW "] {
+                for tier in ["default", "priority", "fast"] {
+                    assert_eq!(estimate_with_rules_for_tier(model, &usage, tier, &[]), Some(0));
+                    assert_eq!(estimate_with_rules_for_tier(model, &usage, tier, &[rule.clone()]), Some(0));
+                }
+            }
+        }
     }
 
     #[test]

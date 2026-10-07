@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
-use crate::{db, models::{default_pricing_rules, PricingRule}};
+use crate::{db, models::{default_pricing_rules, PricingRule}, pricing::is_non_billable_model};
 
 const SOURCE: &str = "https://developers.openai.com/api/docs/pricing";
 const DOCUMENT: &str = "https://developers.openai.com/api/docs/pricing.md";
@@ -23,7 +23,7 @@ pub struct PricingStatus {
 
 impl Default for PricingStatus {
     fn default() -> Self {
-        Self { checked_at: None, updated_at: None, last_error: None, official_rules: default_pricing_rules() }
+        Self { checked_at: None, updated_at: None, last_error: None, official_rules: default_pricing_rules().into_iter().filter(|rule| !is_non_billable_model(&rule.model)).collect() }
     }
 }
 
@@ -65,6 +65,7 @@ fn find_rule<'a>(rules: &'a [PricingRule], model: &str) -> Option<&'a PricingRul
 pub fn merge_official(current: &[PricingRule], previous: &[PricingRule], next: &[PricingRule]) -> Vec<PricingRule> {
     let mut result = current.to_vec();
     for rule in next {
+        if is_non_billable_model(&rule.model) { continue; }
         match result.iter_mut().find(|item| item.model.trim().eq_ignore_ascii_case(&rule.model)) {
             Some(item) if find_rule(previous, &item.model).is_some_and(|old| same_prices(item, old)) => *item = rule.clone(),
             Some(_) => {},
@@ -294,15 +295,27 @@ mod tests {
         let previous = default_pricing_rules();
         let mut current = previous.clone();
         current[0].input_usd_per_million = 9.0;
-        let mut custom = current[0].clone(); custom.model = "codex-auto-review".into(); current.push(custom);
+        let mut custom = current[0].clone(); custom.model = "custom-review-model".into(); current.push(custom);
         let mut next = previous.clone(); next[0].input_usd_per_million = 12.0; next[1].output_usd_per_million = 50.0;
         let merged = merge_official(&current, &previous, &next);
         assert_eq!(merged[0].input_usd_per_million, 9.0);
         assert_eq!(merged[1].output_usd_per_million, 50.0);
-        assert!(find_rule(&merged, "codex-auto-review").is_some());
+        assert!(find_rule(&merged, "custom-review-model").is_some());
         let draft = merge_settings_draft(&current, &previous, &next);
         assert_eq!(draft[0].input_usd_per_million, 9.0);
         assert_eq!(draft[1].output_usd_per_million, 50.0);
+    }
+
+    #[test]
+    fn official_updates_cannot_price_auto_review() {
+        let current = default_pricing_rules();
+        let mut next = current.clone();
+        let review = next.iter_mut().find(|rule| is_non_billable_model(&rule.model)).unwrap();
+        review.input_usd_per_million = 99.0;
+        review.output_usd_per_million = 99.0;
+        let merged = merge_official(&current, &current, &next);
+        assert_eq!(find_rule(&merged, "codex-auto-review"), find_rule(&current, "codex-auto-review"));
+        assert!(find_rule(&PricingStatus::default().official_rules, "codex-auto-review").is_none());
     }
 
     #[test]

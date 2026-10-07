@@ -1,5 +1,6 @@
 import type { OverviewData, SessionAggregate, SshSourceConfig, TokenBreakdown, TurnUsage, UsageSource } from "../types";
 import { localDateKey } from "./daily";
+import { isNonBillableModel } from "./pricing";
 
 const baseDate = new Date();
 baseDate.setHours(9, 21, 0, 0);
@@ -26,7 +27,15 @@ export const demoSessions: SessionAggregate[] = Array.from({ length: 42 }, (_, i
   const cached = Math.round(input * (0.56 + (index % 5) * 0.065));
   const model = models[index % models.length];
   const cacheWrite = Math.round(input * (0.01 + (index % 3) * 0.006));
-  const modelRate = model === "gpt-5.6-sol" ? 4 : model === "gpt-5.6-terra" ? 2 : model === "gpt-5.6-luna" ? 0.2 : model === "gpt-5.5" ? 5 : model === "gpt-5.4" ? 2.5 : null;
+  const usage = tokens(input, cached, output, Math.round(output * 0.35), cacheWrite);
+  const reviewTurns: TurnUsage[] | undefined = isNonBillableModel(model) ? Array.from({ length: 12 }, (_, ordinal) => {
+    const part = (value: number) => Math.floor(value / 12) + (ordinal < value % 12 ? 1 : 0);
+    const turnTokens = tokens(part(input), part(cached), part(output), part(usage.reasoningOutputTokens), part(cacheWrite));
+    return { ordinal: ordinal + 1, timestamp: new Date(date.getTime() + ordinal * 94_000).toISOString(), model,
+      serviceTier: "default", reasoningEffort: "low", tokens: turnTokens, estimateMicrousd: 0,
+      cacheRate: turnTokens.cachedInputTokens / turnTokens.inputTokens * 100 };
+  }) : undefined;
+  const modelRate = isNonBillableModel(model) ? 0 : model === "gpt-5.6-sol" ? 4 : model === "gpt-5.6-terra" ? 2 : model === "gpt-5.6-luna" ? 0.2 : model === "gpt-5.5" ? 5 : model === "gpt-5.4" ? 2.5 : null;
   return {
     sessionId: `00000000-0000-4000-${String(9000 + index)}-000000000000`,
     sourceId: "local",
@@ -37,12 +46,13 @@ export const demoSessions: SessionAggregate[] = Array.from({ length: 42 }, (_, i
     startedAt: date.toISOString(),
     endedAt: new Date(date.getTime() + 18 * 60_000).toISOString(),
     origin: "Codex Desktop",
-    tokens: tokens(input, cached, output, Math.round(output * 0.35), cacheWrite),
+    tokens: usage,
     activityTokens: total,
     estimateMicrousd: modelRate === null ? null : Math.round((((input - cached) * modelRate + cached * modelRate * 0.1 + output * modelRate * 5) / 1_000_000) * 1_000_000),
     unpricedTurnCount: modelRate === null ? 12 : index === 0 ? 1 : 0,
     unpricedTokens: modelRate === null ? total : index === 0 ? 12_167 : 0,
     tokenEventCount: 12,
+    turns: reviewTurns,
     rateUsedPercent: 14,
     rateWindowMinutes: 10080
   };

@@ -173,6 +173,9 @@ pub fn parse_session<R: BufRead>(reader: R, source_id: &str, source_name: &str, 
                 }
             }
             Some("event_msg") if value["payload"].get("type").and_then(Value::as_str) == Some("thread_settings_applied") => {
+                if let Some(next_model) = value["payload"]["thread_settings"].get("model").and_then(Value::as_str).filter(|value| !value.trim().is_empty()) {
+                    model = next_model.to_string();
+                }
                 if let Some(next_tier) = value["payload"]["thread_settings"].get("service_tier").and_then(Value::as_str) {
                     service_tier = normalize_service_tier(next_tier);
                 }

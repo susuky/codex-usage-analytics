@@ -127,7 +127,7 @@ try {
   await page.screenshot({path:join(root,'native-official-pricing.png')});
   await page.getByRole('button',{name:'取消',exact:true}).click();
   await page.getByLabel('搜尋模型價格').fill('');
-  await expect(page.locator('.pricing-table tbody tr')).toHaveCount(official.officialRules.length);
+  await expect(page.locator('.pricing-table tbody tr')).toHaveCount(official.officialRules.length+1);
   const names=await page.locator('.pricing-model-name').allTextContents();
   if(JSON.stringify(names)!==JSON.stringify([...names].sort((a,b)=>a.localeCompare(b,'en',{numeric:true,sensitivity:'base'})))) throw new Error('Native model name sorting failed');
   await page.getByRole('link',{name:'模型價格',exact:true}).click();
@@ -232,9 +232,42 @@ if($window -eq 0 -or -not [NativeResize]::SetWindowPos($window,[IntPtr]::Zero,80
   await expect(page.getByLabel('結束日期')).toHaveValue('2026-09-03');
   await page.getByRole('button',{name:'取消',exact:true}).click();
   await page.screenshot({path:join(root,'native-restored.png')});
+  // A resumed file may contain only new requests; retain its already saved prefix.
+  const suffix=[log[0],log[1],
+    {type:'event_msg',payload:{type:'thread_settings_applied',thread_settings:{model:'gpt-6-astra',service_tier:'priority'}}},
+    {type:'event_msg',timestamp:new Date(Date.parse(stamp)+1000).toISOString(),payload:{type:'token_count',info:{last_token_usage:{input_tokens:1_900_000,cached_input_tokens:1_800_000,output_tokens:100_000,total_tokens:2_000_000}}}},
+    {type:'event_msg',payload:{type:'thread_settings_applied',thread_settings:{model:'codex-auto-review'}}},
+    {type:'event_msg',timestamp:new Date(Date.parse(stamp)+2000).toISOString(),payload:{type:'token_count',info:{last_token_usage:{total_tokens:350}}}}
+  ];
+  writeFileSync(join(root,'codex','sessions','sample.jsonl'),suffix.map(value=>JSON.stringify(value)).join('\n')+'\n');
+  const scan=()=>page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('scan_sources',{forceFull:true}));
+  for(let pass=0;pass<2;pass++) {
+    const scanned=await scan();
+    if(scanned.sources.find(source=>source.id==='local').stale) throw new Error('Resumed suffix did not import successfully');
+    const session=await page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('get_session_detail',{sourceId:'local',sessionId:'native-smoke'}));
+    if(session.tokens.totalTokens!==2_001_450 || session.tokenEventCount!==3) throw new Error('Resumed scan lost or duplicated usage');
+    if(session.turns.map(turn=>turn.model).join(',')!=='gpt-5.6-sol,gpt-6-astra,codex-auto-review') throw new Error('Native model switch was not attributed correctly');
+    if(session.turns[2].estimateMicrousd!==0 || session.unpricedTurnCount!==0) throw new Error('Native review usage was billed or marked unpriced');
+  }
+  await page.getByRole('button',{name:'展開側欄'}).click();
+  await page.getByRole('link',{name:'總覽',exact:true}).click();
+  await page.getByLabel('日期範圍').selectOption('1');
+  await page.getByRole('button',{name:'重新掃描',exact:true}).click();
+  await expect(page.getByRole('button',{name:'重新掃描',exact:true})).toBeEnabled({timeout:30_000});
+  const fixedModels=page.getByRole('region',{name:'模型用量排行'});
+  await expect(fixedModels.getByText('gpt-6-astra',{exact:true})).toBeVisible();
+  await expect(fixedModels.getByText('codex-auto-review',{exact:true})).toBeVisible();
+  await page.screenshot({path:join(root,'native-model-switch.png')});
+  await page.getByRole('link',{name:'設定',exact:true}).click();
+  await page.getByLabel('搜尋模型價格').fill('codex-auto-review');
+  const reviewRow=page.locator('.pricing-table tbody tr').filter({hasText:'codex-auto-review'});
+  await expect(reviewRow.getByText('不計費',{exact:true})).toBeVisible();
+  await expect(reviewRow.getByRole('button')).toHaveCount(0);
+  await reviewRow.scrollIntoViewIfNeeded();
+  await page.screenshot({path:join(root,'native-auto-review.png')});
   if(errors.length) throw new Error(errors.join('\n'));
   await closeNative();
-  console.log(JSON.stringify({...result,windowControls:'maximize, restore, minimize, close passed',persistence:'normal size, maximized state, sidebar, preset and custom dates passed across two relaunches'}));
+  console.log(JSON.stringify({...result,modelSwitch:'Astra and non-billable review imported; resumed suffix retained without duplication',additionalScreenshots:[join(root,'native-model-switch.png'),join(root,'native-auto-review.png')],windowControls:'maximize, restore, minimize, close passed',persistence:'normal size, maximized state, sidebar, preset and custom dates passed across two relaunches'}));
 } finally {
   await browser?.close().catch(()=>{});
   if(child.exitCode===null)child.kill();

@@ -90,6 +90,19 @@ it("validates required and duplicate models without creating zero-price drafts",
   expect(saveSettings).not.toHaveBeenCalled();
 });
 
+it("shows auto review as non billable and prevents renaming paid rules to it", async () => {
+  render(<SettingsPage />);
+  const row = await screen.findByRole("row", { name: /codex-auto-review/ });
+  expect(row).toHaveTextContent("不計費");
+  expect(row).toHaveTextContent("保留用量紀錄，費用固定為 0。");
+  expect(screen.queryByRole("button", { name: /codex-auto-review 價格/ })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "編輯 gpt-5.6-sol 價格" }));
+  fireEvent.change(screen.getByLabelText("模型名稱"), { target: { value: " CODEX-AUTO-REVIEW " } });
+  fireEvent.click(screen.getByRole("button", { name: "保存價格" }));
+  expect(screen.getByRole("alert")).toHaveTextContent("固定不計費，無需設定價格");
+  expect(saveSettings).not.toHaveBeenCalled();
+});
+
 it("restores official prices without changing unsupported rate defaults or their availability", async () => {
   const official = { ...saved.pricingRules[0], cachedUsdPerMillion: 0, cacheWriteUsdPerMillion: 0, priorityMultiplier: 1, unavailableRates: ["cached", "cacheWrite", "fast", "longFast"] };
   saved.pricingRules[0] = { ...official, inputUsdPerMillion: 9 };

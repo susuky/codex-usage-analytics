@@ -1,5 +1,19 @@
 import type { PricingRule } from "../types";
 
+export const nonBillablePricingRule: PricingRule = {
+  model: "codex-auto-review", inputUsdPerMillion: 0, cachedUsdPerMillion: 0, cacheWriteUsdPerMillion: 0,
+  outputUsdPerMillion: 0, cacheWriteMultiplier: 1, longContextThreshold: Number.MAX_SAFE_INTEGER,
+  longInputMultiplier: 1, longOutputMultiplier: 1, priorityMultiplier: 0, sourceUrl: "", reviewedAt: "2026-10-07", unavailableRates: []
+};
+
+export function isNonBillableModel(model: string) {
+  return model.trim().toLowerCase() === nonBillablePricingRule.model;
+}
+
+export function applyNonBillablePricing(rules: PricingRule[]) {
+  return [...rules.filter(rule => !isNonBillableModel(rule.model)), { ...nonBillablePricingRule, unavailableRates: [] }];
+}
+
 export type PricingSortKey = "model" | "inputUsdPerMillion" | "cachedUsdPerMillion" | "outputUsdPerMillion";
 export interface PricingSort {
   key: PricingSortKey;

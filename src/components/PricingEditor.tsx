@@ -1,6 +1,6 @@
 import { ArrowDown, ArrowDownAZ, ArrowUp, ArrowUpAZ, ArrowUpDown, LoaderCircle, Pencil, Plus, RotateCcw, Search, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { hasLongContextPricing, samePrices, sortPricingRows, type PricingSort, type PricingSortKey } from "../lib/pricing";
+import { hasLongContextPricing, isNonBillableModel, samePrices, sortPricingRows, type PricingSort, type PricingSortKey } from "../lib/pricing";
 import type { PricingRule } from "../types";
 
 type PriceField = "inputUsdPerMillion" | "cachedUsdPerMillion" | "cacheWriteUsdPerMillion" | "outputUsdPerMillion" | "priorityMultiplier";
@@ -90,14 +90,15 @@ export function PricingEditor({ rules, officialRules, usedModels, busy, onSave }
         </th>;
       })}<th scope="col" aria-label="操作" /></tr></thead>
       <tbody>{visible.map(({ model, rule }) => {
+        const nonBillable = isNonBillableModel(model);
         const officialRule = official.get(keyOf(model));
         const custom = rule && (!officialRule || !samePrices(rule, officialRule));
         return <tr key={keyOf(model)}>
-          <th scope="row"><span className="pricing-model-name">{model}</span><span className="pricing-model-notes">{!rule ? <span className="pricing-badge unpriced">尚未定價</span> : custom ? <span className="pricing-badge custom">自訂</span> : null}{used.has(keyOf(model)) ? <span>本期使用</span> : null}</span>{rule && hasLongContextPricing(rule) ? <span className="pricing-context-note">輸入 &gt; {thresholdLabel(rule.longContextThreshold)}：輸入／快取 ×{price(rule.longInputMultiplier)} · 輸出 ×{price(rule.longOutputMultiplier)}</span> : null}</th>
+          <th scope="row"><span className="pricing-model-name">{model}</span><span className="pricing-model-notes">{nonBillable ? <span className="pricing-badge">不計費</span> : !rule ? <span className="pricing-badge unpriced">尚未定價</span> : custom ? <span className="pricing-badge custom">自訂</span> : null}{used.has(keyOf(model)) ? <span>本期使用</span> : null}</span>{nonBillable ? <span className="pricing-context-note">保留用量紀錄，費用固定為 0。</span> : rule && hasLongContextPricing(rule) ? <span className="pricing-context-note">輸入 &gt; {thresholdLabel(rule.longContextThreshold)}：輸入／快取 ×{price(rule.longInputMultiplier)} · 輸出 ×{price(rule.longOutputMultiplier)}</span> : null}</th>
           <td data-label="輸入">{rule ? price(rule.inputUsdPerMillion) : "—"}</td>
           <td data-label="快取輸入">{rule && !rule.unavailableRates?.includes("cached") ? price(rule.cachedUsdPerMillion) : "—"}</td>
           <td data-label="輸出">{rule ? price(rule.outputUsdPerMillion) : "—"}</td>
-          <td className="pricing-row-action"><button type="button" disabled={busy} aria-label={`${rule ? "編輯" : "設定"} ${model} 價格`} onClick={() => open(model, rule)}>{rule ? <Pencil size={14} aria-hidden="true" /> : <Plus size={15} aria-hidden="true" />}{rule ? "編輯" : "設定"}</button></td>
+          <td className="pricing-row-action">{nonBillable ? "—" : <button type="button" disabled={busy} aria-label={`${rule ? "編輯" : "設定"} ${model} 價格`} onClick={() => open(model, rule)}>{rule ? <Pencil size={14} aria-hidden="true" /> : <Plus size={15} aria-hidden="true" />}{rule ? "編輯" : "設定"}</button>}</td>
         </tr>;
       })}</tbody>
     </table>
@@ -139,6 +140,7 @@ function PriceDialog({ model: initialModel, original, official, rules, onSave, o
     event.preventDefault();
     if (saving) return;
     if (!model.trim()) { setError("請輸入模型名稱。"); setInvalidField("model"); modelInput.current?.focus(); return; }
+    if (isNonBillableModel(model)) { setError("codex-auto-review 固定不計費，無需設定價格。"); setInvalidField("model"); modelInput.current?.focus(); return; }
     if (rules.some(rule => keyOf(rule.model) === keyOf(model) && keyOf(rule.model) !== keyOf(original?.model ?? ""))) { setError("這個模型已經有價格，請編輯現有模型。"); setInvalidField("model"); modelInput.current?.focus(); return; }
     for (const { field, label, unavailable } of fields) {
       if ((!unavailable && !values[field].trim()) || values[field] && (!Number.isFinite(Number(values[field])) || Number(values[field]) < 0)) {
@@ -178,7 +180,7 @@ function PriceDialog({ model: initialModel, original, official, rules, onSave, o
     <form onSubmit={submit} noValidate>
       <div className="price-dialog-heading"><div><h2 id={`${id}-title`}>{original ? "編輯模型價格" : "新增自訂價格"}</h2><p id={`${id}-description`}>美元／每百萬 Tokens · 保存後重新計算估算費用</p></div><button type="button" className="price-dialog-close" aria-label="關閉價格編輯" disabled={saving} onClick={onDismiss}><X size={19} /></button></div>
       <div className="price-dialog-body">
-        <label className="price-model-field"><span>模型名稱</span><input ref={modelInput} aria-label="模型名稱" aria-invalid={invalidField === "model" || undefined} aria-describedby={invalidField === "model" ? `${id}-error` : undefined} value={model} placeholder="例如 codex-auto-review" disabled={saving} onChange={event => { setModel(event.target.value); clearError(); }} /></label>
+        <label className="price-model-field"><span>模型名稱</span><input ref={modelInput} aria-label="模型名稱" aria-invalid={invalidField === "model" || undefined} aria-describedby={invalidField === "model" ? `${id}-error` : undefined} value={model} placeholder="例如 my-model" disabled={saving} onChange={event => { setModel(event.target.value); clearError(); }} /></label>
         <div className="price-edit-columns"><div>
         <section className="price-base-section" aria-label="一般單價"><h3>一般單價</h3><div className="pricing-fields">{fields.filter(item => item.field !== "priorityMultiplier").map(renderField)}</div></section>
         <div className="pricing-fields price-priority-field">{renderField(fields[4])}<p className="price-field-hint">使用 Fast / Priority 時，再套用此倍率。</p></div>

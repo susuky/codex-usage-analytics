@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { buildDemoOverview, buildDemoSources, demoSessions } from "./mockData";
 import { localDateKey } from "./daily";
+import { applyNonBillablePricing, isNonBillableModel, nonBillablePricingRule } from "./pricing";
 import type { AppSettings, OverviewData, PricingRule, PricingStatus, PricingUpdateResult, ScanResult, SessionAggregate, SshSourceConfig, StoredSyncState, UsageFilter, UsageSource } from "../types";
 
 const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -56,7 +57,8 @@ export const defaultPricingRules: PricingRule[] = [
   { model: "gpt-5.6-luna", inputUsdPerMillion: 0.2, cachedUsdPerMillion: 0.02, cacheWriteUsdPerMillion: 0.25, outputUsdPerMillion: 1.2, cacheWriteMultiplier: 1.25, longContextThreshold: 272000, longInputMultiplier: 2, longOutputMultiplier: 1.5, priorityMultiplier: 2, sourceUrl: "https://developers.openai.com/api/docs/models/gpt-5.6-luna", reviewedAt: "2026-09-03" },
   { model: "gpt-5.5", inputUsdPerMillion: 5, cachedUsdPerMillion: 0.5, cacheWriteUsdPerMillion: 6.25, outputUsdPerMillion: 30, cacheWriteMultiplier: 1.25, longContextThreshold: 272000, longInputMultiplier: 2, longOutputMultiplier: 1.5, priorityMultiplier: 2, sourceUrl: "https://developers.openai.com/api/docs/models/gpt-5.5", reviewedAt: "2026-09-03" },
   { model: "gpt-5.4", inputUsdPerMillion: 2.5, cachedUsdPerMillion: 0.25, cacheWriteUsdPerMillion: 3.125, outputUsdPerMillion: 15, cacheWriteMultiplier: 1.25, longContextThreshold: 272000, longInputMultiplier: 2, longOutputMultiplier: 1.5, priorityMultiplier: 2, sourceUrl: "https://developers.openai.com/api/docs/models/gpt-5.4", reviewedAt: "2026-09-03" },
-  { model: "gpt-5.3-codex", inputUsdPerMillion: 1.75, cachedUsdPerMillion: 0.175, cacheWriteUsdPerMillion: 2.1875, outputUsdPerMillion: 14, cacheWriteMultiplier: 1.25, longContextThreshold: 400000, longInputMultiplier: 1, longOutputMultiplier: 1, priorityMultiplier: 2, sourceUrl: "https://developers.openai.com/api/docs/models/gpt-5.3-codex", reviewedAt: "2026-09-03" }
+  { model: "gpt-5.3-codex", inputUsdPerMillion: 1.75, cachedUsdPerMillion: 0.175, cacheWriteUsdPerMillion: 2.1875, outputUsdPerMillion: 14, cacheWriteMultiplier: 1.25, longContextThreshold: 400000, longInputMultiplier: 1, longOutputMultiplier: 1, priorityMultiplier: 2, sourceUrl: "https://developers.openai.com/api/docs/models/gpt-5.3-codex", reviewedAt: "2026-09-03" },
+  nonBillablePricingRule
 ];
 
 const defaultSettings: AppSettings = {
@@ -80,13 +82,14 @@ export async function getSettings(): Promise<AppSettings> {
       loaded.sshSources = [{ id: `ssh-${host}`, name: host, target: loaded.sshTarget, codexHome: "", enabled: loaded.sshEnabled ?? true }];
     }
     loaded.sshSources = (loaded.sshSources ?? []).map((source: SshSourceConfig) => ({ ...source, codexHome: source.codexHome ?? "" }));
-    loaded.pricingRules = (loaded.pricingRules?.length ? loaded.pricingRules : defaultPricingRules).map((rule: PricingRule) => ({ ...rule, priorityMultiplier: rule.priorityMultiplier ?? 2 }));
+    loaded.pricingRules = applyNonBillablePricing((loaded.pricingRules?.length ? loaded.pricingRules : defaultPricingRules).map((rule: PricingRule) => ({ ...rule, priorityMultiplier: rule.priorityMultiplier ?? 2 })));
     return loaded;
   }
   return invoke<AppSettings>("get_settings");
 }
 
 export async function saveSettings(settings: AppSettings, basePricingRules?: PricingRule[]): Promise<void> {
+  settings = { ...settings, pricingRules: applyNonBillablePricing(settings.pricingRules) };
   if (!isTauri()) {
     sessionStorage.setItem("codex-usage-settings", JSON.stringify(settings));
     window.dispatchEvent(new Event("usage-settings-changed"));
@@ -97,7 +100,7 @@ export async function saveSettings(settings: AppSettings, basePricingRules?: Pri
 }
 
 export async function getPricingStatus(): Promise<PricingStatus> {
-  if (!isTauri()) return { checkedAt: null, updatedAt: null, lastError: null, officialRules: defaultPricingRules };
+  if (!isTauri()) return { checkedAt: null, updatedAt: null, lastError: null, officialRules: defaultPricingRules.filter(rule => !isNonBillableModel(rule.model)) };
   return invoke<PricingStatus>("get_pricing_status");
 }
 

@@ -147,8 +147,13 @@ function Convert-Session([string]$Path) {
                 $effort = [string](Get-Value $payload 'effort' '')
                 if ($effort) { $reasoningEffort = $effort.Trim(); Add-Count $efforts $reasoningEffort }
             } elseif ($kind -eq 'event_msg' -and (Get-Value $payload 'type' '') -eq 'thread_settings_applied') {
-                $reportedTier = [string](Get-Value (Get-Value $payload 'thread_settings' $null) 'service_tier' '')
-                $serviceTier = if (@('priority', 'fast') -contains $reportedTier.Trim().ToLowerInvariant()) { 'priority' } else { 'default' }
+                $settings = Get-Value $payload 'thread_settings' $null
+                $nextModel = [string](Get-Value $settings 'model' '')
+                if (-not [string]::IsNullOrWhiteSpace($nextModel)) { $model = $nextModel }
+                $reportedTier = Get-Value $settings 'service_tier' $null
+                if ($null -ne $reportedTier) {
+                    $serviceTier = if (@('priority', 'fast') -contains ([string]$reportedTier).Trim().ToLowerInvariant()) { 'priority' } else { 'default' }
+                }
             } elseif ($kind -eq 'event_msg' -and (Get-Value $payload 'type' '') -eq 'token_count') {
                 $info = Get-Value $payload 'info' $null
                 $totalUsage = Get-Value $info 'total_token_usage' $null

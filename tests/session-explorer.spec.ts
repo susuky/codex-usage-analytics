@@ -5,9 +5,12 @@ test.use({ timezoneId: "Asia/Taipei" });
 test("filters by model and pricing, and recovers from no results", async ({ page }) => {
   await page.goto("/sessions");
   await page.getByRole("combobox", { name: "模型", exact: true }).selectOption("codex-auto-review");
-  await page.getByRole("combobox", { name: "估算狀態", exact: true }).selectOption("unpriced");
+  await page.getByRole("combobox", { name: "估算狀態", exact: true }).selectOption("complete");
   await expect(page.getByRole("heading", { name: "7 個 Sessions" })).toBeVisible();
   await expect(page.locator("tbody tr")).toHaveCount(7);
+  await page.getByRole("combobox", { name: "估算狀態", exact: true }).selectOption("unpriced");
+  await expect(page.getByRole("heading", { name: "沒有符合條件的 Session" })).toBeVisible();
+  await page.getByRole("combobox", { name: "估算狀態", exact: true }).selectOption("complete");
   await page.getByLabel("搜尋 Sessions").fill("no-such-project");
   await expect(page.getByRole("heading", { name: "沒有符合條件的 Session" })).toBeVisible();
   await page.getByRole("button", { name: "顯示此區間全部紀錄" }).click();

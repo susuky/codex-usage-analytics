@@ -144,7 +144,12 @@ pub fn default_pricing_rules() -> Vec<PricingRule> {
         PricingRule { model: "gpt-5.5".into(), input_usd_per_million: 5.0, cached_usd_per_million: 0.50, cache_write_usd_per_million: 6.25, output_usd_per_million: 30.0, cache_write_multiplier: 1.25, long_context_threshold: 272_000, long_input_multiplier: 2.0, long_output_multiplier: 1.5, priority_multiplier: 2.0, source_url: "https://developers.openai.com/api/docs/models/gpt-5.5".into(), reviewed_at: "2026-09-03".into(), unavailable_rates: Vec::new() },
         PricingRule { model: "gpt-5.4".into(), input_usd_per_million: 2.50, cached_usd_per_million: 0.25, cache_write_usd_per_million: 3.125, output_usd_per_million: 15.0, cache_write_multiplier: 1.25, long_context_threshold: 272_000, long_input_multiplier: 2.0, long_output_multiplier: 1.5, priority_multiplier: 2.0, source_url: "https://developers.openai.com/api/docs/models/gpt-5.4".into(), reviewed_at: "2026-09-03".into(), unavailable_rates: Vec::new() },
         PricingRule { model: "gpt-5.3-codex".into(), input_usd_per_million: 1.75, cached_usd_per_million: 0.175, cache_write_usd_per_million: 2.1875, output_usd_per_million: 14.0, cache_write_multiplier: 1.25, long_context_threshold: 400_000, long_input_multiplier: 1.0, long_output_multiplier: 1.0, priority_multiplier: 2.0, source_url: "https://developers.openai.com/api/docs/models/gpt-5.3-codex".into(), reviewed_at: "2026-09-03".into(), unavailable_rates: Vec::new() },
+        non_billable_pricing_rule(),
     ]
+}
+
+pub fn non_billable_pricing_rule() -> PricingRule {
+    PricingRule { model: "codex-auto-review".into(), input_usd_per_million: 0.0, cached_usd_per_million: 0.0, cache_write_usd_per_million: 0.0, output_usd_per_million: 0.0, cache_write_multiplier: 1.0, long_context_threshold: 9_007_199_254_740_991, long_input_multiplier: 1.0, long_output_multiplier: 1.0, priority_multiplier: 0.0, source_url: String::new(), reviewed_at: "2026-10-07".into(), unavailable_rates: Vec::new() }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

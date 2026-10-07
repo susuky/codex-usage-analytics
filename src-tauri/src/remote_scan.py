@@ -140,8 +140,13 @@ def parse_file(path):
                     reasoning_effort = str(payload.get("effort")).strip() or reasoning_effort
                     add_count(efforts, reasoning_effort)
             elif kind == "event_msg" and payload.get("type") == "thread_settings_applied":
-                reported_tier = ((payload.get("thread_settings") or {}).get("service_tier") or "").strip().lower()
-                service_tier = "priority" if reported_tier in ("priority", "fast") else "default"
+                settings = payload.get("thread_settings") or {}
+                next_model = settings.get("model")
+                if isinstance(next_model, str) and next_model.strip():
+                    model = next_model
+                if settings.get("service_tier") is not None:
+                    reported_tier = settings["service_tier"].strip().lower()
+                    service_tier = "priority" if reported_tier in ("priority", "fast") else "default"
             elif kind == "event_msg" and payload.get("type") == "token_count":
                 info = payload.get("info") or {}
                 duplicate_snapshot = False

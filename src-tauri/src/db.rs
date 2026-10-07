@@ -178,13 +178,13 @@ pub fn open(path: &Path) -> Result<Connection, String> {
         [PRICING_REVISION_KEY],
         |row| row.get(0),
     ).optional().map_err(|error| error.to_string())?;
-    if pricing_revision.as_deref() != Some("2") {
+    if pricing_revision.as_deref() != Some("3") {
         let mut settings = load_settings(&connection)?;
         merge_missing_default_pricing_rules(&mut settings);
         save_settings(&connection, &settings)?;
         reprice_all_sessions(&mut connection, &settings.pricing_rules)?;
         connection.execute(
-            "INSERT INTO settings(key,value) VALUES(?1,'2') ON CONFLICT(key) DO UPDATE SET value='2'",
+            "INSERT INTO settings(key,value) VALUES(?1,'3') ON CONFLICT(key) DO UPDATE SET value='3'",
             [PRICING_REVISION_KEY],
         ).map_err(|error| error.to_string())?;
     }
@@ -217,6 +217,14 @@ pub fn open(path: &Path) -> Result<Connection, String> {
             COMMIT;").map_err(|e| e.to_string())?;
         let rules = load_settings(&connection)?.pricing_rules;
         reprice_all_sessions(&mut connection, &rules)?;
+    }
+    let settings_models: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key='data_revision:thread-settings-model-v1')", [], |row| row.get(0)).map_err(|e| e.to_string())?;
+    if !settings_models {
+        connection.execute_batch("BEGIN IMMEDIATE;
+            DELETE FROM file_checkpoints;
+            UPDATE sources SET last_scanned_at=NULL WHERE kind IN ('local','ssh');
+            INSERT INTO settings VALUES('data_revision:thread-settings-model-v1','1');
+            COMMIT;").map_err(|e| e.to_string())?;
     }
     Ok(connection)
 }
@@ -258,40 +266,59 @@ fn save_sessions_with_activity(connection: &mut Connection, sessions: &[SessionA
     let mut retained = 0;
     for session in sessions {
         let mut current = session.clone();
+        let mut retained_history = false;
         crate::pricing::reprice_sessions(std::slice::from_mut(&mut current), &rules);
-        let session = &current;
-        let Some(incoming_turns) = &session.turns else { retained += 1; continue };
+        let Some(incoming_turns) = &current.turns else { retained += 1; continue };
         let existing: Option<(i64, i64, String)> = tx.query_row(
             "SELECT token_event_count,total_tokens,ended_at FROM sessions WHERE source_id=?1 AND session_id=?2",
-            params![session.source_id, session.session_id],
+            params![current.source_id, current.session_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional().map_err(|error| error.to_string())?;
-        // A larger cumulative total is not evidence that all previously imported requests
-        // are present. Require old observations to survive, in order, before replacement.
+        // Preserve history when a resumed log contains only its newer suffix.
+        // Overlapping observations must still agree; gaps in the middle stay rejected.
         if let Some((event_count, total_tokens, ended_at)) = existing {
             let mut query = tx.prepare("SELECT timestamp,total_tokens FROM turns WHERE source_id=?1 AND session_id=?2 ORDER BY ordinal").map_err(|e| e.to_string())?;
-            let old = query.query_map(params![session.source_id,session.session_id], |row| Ok((row.get::<_,String>(0)?, row.get::<_,i64>(1)?))).map_err(|e| e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())?;
-            if session.token_event_count < event_count
-                || (session.token_event_count == event_count && session.tokens.total_tokens < total_tokens)
+            let old = query.query_map(params![current.source_id,current.session_id], |row| Ok((row.get::<_,String>(0)?, row.get::<_,i64>(1)?))).map_err(|e| e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())?;
+            let mut next = incoming_turns.iter();
+            let includes_old = old.iter().all(|(timestamp,total)| next.any(|turn| same_timestamp(&turn.timestamp, timestamp) && turn.tokens.total_tokens == *total));
+            let segments = if current.scan_complete && !includes_old {
+                retained_segments(&old, incoming_turns)
+            } else { None };
+            if let Some((saved_count, incoming_start, conflicting_history)) = segments {
+                let previous = get_session(&tx, &current.source_id, &current.session_id)?;
+                let mut turns: Vec<_> = previous.turns.unwrap_or_default().into_iter().take(saved_count).chain(incoming_turns[incoming_start..].iter().cloned()).collect();
+                current.tokens = TokenBreakdown::default();
+                for (index, turn) in turns.iter_mut().enumerate() {
+                    turn.ordinal = index as i64 + 1;
+                    current.tokens.add_assign(&turn.tokens);
+                }
+                current.started_at = previous.started_at;
+                current.token_event_count = turns.len() as i64;
+                current.activity_tokens = current.tokens.total_tokens;
+                current.turns = Some(turns);
+                retained_history = true;
+                if conflicting_history { retained += 1; }
+                crate::pricing::reprice_sessions(std::slice::from_mut(&mut current), &rules);
+            } else if current.token_event_count < event_count
+                || (current.token_event_count == event_count && current.tokens.total_tokens < total_tokens)
             {
                 // Active/archive copies can contain an earlier, already imported snapshot.
                 // Only silence it when every incoming observation is already saved and the
                 // complete snapshot is not newer. Conflicting/truncated histories still warn.
-                let not_newer = chrono::DateTime::parse_from_rfc3339(&session.ended_at).ok()
+                let not_newer = chrono::DateTime::parse_from_rfc3339(&current.ended_at).ok()
                     .zip(chrono::DateTime::parse_from_rfc3339(&ended_at).ok())
                     .is_some_and(|(incoming, saved)| incoming <= saved);
                 let mut saved = old.iter();
-                let already_imported = session.scan_complete
-                    && session.token_event_count < event_count
-                    && session.tokens.total_tokens <= total_tokens
+                let already_imported = current.scan_complete
+                    && current.token_event_count < event_count
+                    && current.tokens.total_tokens <= total_tokens
                     && not_newer
                     && incoming_turns.iter().all(|turn| saved.any(|(timestamp, total)| same_timestamp(&turn.timestamp, timestamp) && turn.tokens.total_tokens == *total));
                 if !already_imported { retained += 1; }
                 continue;
-            }
-            let mut next = incoming_turns.iter();
-            if !old.iter().all(|(timestamp,total)| next.any(|turn| same_timestamp(&turn.timestamp, timestamp) && turn.tokens.total_tokens == *total)) { retained += 1; continue; }
+            } else if !includes_old { retained += 1; continue; }
         }
+        let session = &current;
         let t = &session.tokens;
         tx.execute(
             "INSERT INTO sessions(source_id,session_id,source_name,source_kind,project,model,started_at,ended_at,origin,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,activity_tokens,estimate_microusd,token_event_count,rate_used_percent,rate_window_minutes) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
@@ -300,10 +327,14 @@ fn save_sessions_with_activity(connection: &mut Connection, sessions: &[SessionA
         ).map_err(|error| error.to_string())?;
         tx.execute("DELETE FROM turns WHERE source_id=?1 AND session_id=?2", params![session.source_id, session.session_id]).map_err(|error| error.to_string())?;
         if replace_activity {
-            tx.execute("DELETE FROM session_activity WHERE source_id=?1 AND session_id=?2", params![session.source_id, session.session_id]).map_err(|error| error.to_string())?;
+            // Aggregate activity has no per-request timestamps. For resumed suffixes,
+            // retain known counts without guessing how much the snapshots overlap.
+            if !retained_history {
+                tx.execute("DELETE FROM session_activity WHERE source_id=?1 AND session_id=?2", params![session.source_id, session.session_id]).map_err(|error| error.to_string())?;
+            }
             for (kind, items) in [("skill", &session.activity.skills), ("plugin", &session.activity.plugins), ("effort", &session.activity.efforts)] {
                 for item in items {
-                    tx.execute("INSERT INTO session_activity(source_id,session_id,kind,name,count) VALUES(?1,?2,?3,?4,?5)", params![session.source_id,session.session_id,kind,item.name,item.count]).map_err(|error| error.to_string())?;
+                    tx.execute("INSERT INTO session_activity(source_id,session_id,kind,name,count) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(source_id,session_id,kind,name) DO UPDATE SET count=MAX(session_activity.count,excluded.count)", params![session.source_id,session.session_id,kind,item.name,item.count]).map_err(|error| error.to_string())?;
                 }
             }
         }
@@ -317,6 +348,29 @@ fn save_sessions_with_activity(connection: &mut Connection, sessions: &[SessionA
     }
     tx.commit().map_err(|error| error.to_string())?;
     Ok(retained)
+}
+
+fn retained_segments(old: &[(String, i64)], incoming: &[TurnUsage]) -> Option<(usize, usize, bool)> {
+    let dates = |times: Vec<&str>| times.into_iter().map(chrono::DateTime::parse_from_rfc3339).collect::<Result<Vec<_>, _>>().ok();
+    let old_dates = dates(old.iter().map(|(timestamp, _)| timestamp.as_str()).collect())?;
+    let incoming_dates = dates(incoming.iter().map(|turn| turn.timestamp.as_str()).collect())?;
+    let first = *incoming_dates.first()?;
+    let last_saved = old_dates.last()?;
+    if old_dates.windows(2).chain(incoming_dates.windows(2)).any(|pair| pair[0] > pair[1])
+        || incoming_dates.last()? < last_saved
+    { return None; }
+    let prefix_len = old_dates.iter().take_while(|date| **date < first).count();
+    let mut next = incoming.iter();
+    let overlap_matches = old[prefix_len..].iter().all(|(timestamp, total)| next.any(|turn| same_timestamp(&turn.timestamp, timestamp) && turn.tokens.total_tokens == *total));
+    let classified = |turn: &TurnUsage| turn.tokens.total_tokens <= turn.tokens.input_tokens + turn.tokens.output_tokens;
+    if prefix_len > 0 && overlap_matches && classified(&incoming[0]) {
+        return Some((prefix_len, 0, false));
+    }
+    // Earlier conflicting observations must not block independently recorded newer
+    // requests. Keep every saved turn, append only the strictly newer suffix, and warn.
+    let incoming_start = incoming_dates.iter().take_while(|date| *date <= last_saved).count();
+    let first_new = incoming.get(incoming_start)?;
+    classified(first_new).then_some((old.len(), incoming_start, true))
 }
 
 pub fn same_timestamp(left: &str, right: &str) -> bool {
@@ -659,6 +713,7 @@ pub fn load_settings(connection: &Connection) -> Result<AppSettings, String> {
         let host = settings.ssh_target.split('@').next_back().unwrap_or("remote");
         settings.ssh_sources.push(SshSourceConfig { id: format!("ssh-{host}"), name: host.into(), target: settings.ssh_target.clone(), codex_home: String::new(), enabled: settings.ssh_enabled });
     }
+    crate::pricing::apply_non_billable_pricing(&mut settings.pricing_rules);
     Ok(settings)
 }
 
@@ -695,7 +750,9 @@ pub fn get_activity(connection: &Connection, filter: &UsageFilter) -> Result<Act
 }
 
 pub fn save_settings(connection: &Connection, settings: &AppSettings) -> Result<(), String> {
-    let json = serde_json::to_string(settings).map_err(|error| error.to_string())?;
+    let mut settings = settings.clone();
+    crate::pricing::apply_non_billable_pricing(&mut settings.pricing_rules);
+    let json = serde_json::to_string(&settings).map_err(|error| error.to_string())?;
     connection.execute("INSERT INTO settings(key,value) VALUES('app',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [json]).map_err(|error| error.to_string())?;
     Ok(())
 }

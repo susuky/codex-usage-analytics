@@ -1,6 +1,15 @@
 import { expect, it } from "vitest";
 import { defaultPricingRules } from "./api";
-import { sortPricingRows, type PricingRow, type PricingSortKey } from "./pricing";
+import { applyNonBillablePricing, nonBillablePricingRule, sortPricingRows, type PricingRow, type PricingSortKey } from "./pricing";
+
+it("keeps auto review non billable when legacy settings contain paid or unavailable prices", () => {
+  const paid = { ...defaultPricingRules[0], inputUsdPerMillion: 9 };
+  const legacy = { ...paid, model: " CODEX-AUTO-REVIEW ", unavailableRates: ["fast", "cached"] };
+  const rules = [paid, legacy];
+  expect(applyNonBillablePricing(rules)).toEqual([paid, nonBillablePricingRule]);
+  expect(applyNonBillablePricing([paid])).toEqual([paid, nonBillablePricingRule]);
+  expect(rules).toEqual([paid, legacy]);
+});
 
 it.each<PricingSortKey>(["inputUsdPerMillion", "cachedUsdPerMillion", "outputUsdPerMillion"])("sorts %s numerically in both directions, preserving free and missing prices", key => {
   const rows: PricingRow[] = [

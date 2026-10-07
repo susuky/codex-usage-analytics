@@ -33,6 +33,8 @@ it("sorts the complete result without mutating its source", () => {
   const sorted = sortSessions(demoSessions, { key: "tokens", asc: false });
   expect(sorted[0].tokens.totalTokens).toBe(Math.max(...demoSessions.map(session => session.tokens.totalTokens)));
   expect(sorted.map(session => session.tokens.totalTokens)).toEqual([...sorted.map(session => session.tokens.totalTokens)].sort((a, b) => b - a));
-  expect(sortSessions(demoSessions, { key: "cost", asc: true })[0].estimateMicrousd).toBeNull();
+  expect(sortSessions(demoSessions, { key: "cost", asc: true })[0].estimateMicrousd).toBe(0);
+  const unpriced = { ...demoSessions[0], estimateMicrousd: null };
+  expect(sortSessions([...demoSessions, unpriced], { key: "cost", asc: true })[0].estimateMicrousd).toBeNull();
   expect(demoSessions.map(session => session.sessionId)).toEqual(originalIds);
 });

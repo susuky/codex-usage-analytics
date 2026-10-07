@@ -12,13 +12,15 @@ test("dashboard navigation and session drill-down work", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "每回合用量" })).toBeVisible();
 });
 
-test("sessions distinguish partial estimates from fully unpriced usage", async ({ page }) => {
+test("sessions retain partial estimates and auto review usage without charging", async ({ page }) => {
   await page.goto("/sessions");
   const partialRow = page.getByRole("row").filter({ hasText: "alpha-api-service" }).first();
   await expect(partialRow).toContainText("（部分）");
   await expect(partialRow).toContainText("12.2K 未定價");
-  const unpricedRow = page.getByRole("row").filter({ hasText: "codex-auto-review" }).first();
-  await expect(unpricedRow).toContainText("無法估算");
+  const reviewRow = page.getByRole("row").filter({ hasText: "codex-auto-review" }).first();
+  await expect(reviewRow).toContainText("$0.00");
+  await expect(reviewRow).not.toContainText("未定價");
+  await expect(reviewRow).not.toContainText("無法估算");
 });
 
 test("seven-day view shows today usage and a complete daily axis", async ({ page }) => {
