@@ -38,7 +38,7 @@
 .metricRail { margin: 0 var(--page-gutter) 20px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; }
 .metric { min-width: 0; padding: 18px; display: grid; grid-template-columns: minmax(0, 1fr) 24px; gap: 8px; align-content: start; align-items: center; border-right: 1px solid var(--line); }
 .metric:last-child { border-right: 0; }.metricIcon { grid-column: 2; grid-row: 1; display: grid; place-items: center; color: var(--muted); }
-.metricLabel { grid-column: 1; grid-row: 1; color: var(--muted); font-size: 14px; }.metricValue { grid-column: 1 / -1; color: var(--text); font-size: clamp(24px, 2vw, 32px); font-weight: 600; letter-spacing: -.025em; line-height: 1.3; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.metricLabel { grid-column: 1; grid-row: 1; color: var(--muted); font-size: 14px; }.metricValue { grid-column: 1 / -1; color: var(--text); font-size: clamp(20px, 2vw, 32px); font-weight: 600; letter-spacing: -.025em; line-height: 1.3; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .metric:nth-child(2) { background: #142521; }.metric:nth-child(2) .metricValue, .metric:nth-child(2) .metricIcon { color: var(--mint); }
 .metricHint { grid-column: 1 / -1; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .charts { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, .43fr); gap: 16px; align-items: start; }
@@ -84,6 +84,17 @@
 .modelDateControls { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 8px 0 12px; }
 .modelDateControls select { flex: 1; min-width: 136px; max-width: 100%; min-height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: var(--bg); font-size: 14px; color-scheme: dark; }
 .dayModelTotal { display: inline-block; margin: 0 0 5px; color: var(--mint); font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.chartHeading { flex-wrap: wrap; gap: 0 16px; }
+.chartControls { margin-top: 12px; }
+.chartControls :global(.segmented) { max-width: 100%; margin-bottom: 0; }
+.chartControls :global(.segmented button) { color: var(--muted); }
+.chartControls :global(.segmented button.active) { color: var(--mint); }
+.chartCostNote { margin: 14px 0 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.daySummary { display: grid; gap: 8px; margin: 16px 0; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.daySummary .dayModelTotal { margin: 0; }
+.dayEstimate { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+.dayEstimate > span, .daySummary > small { color: var(--muted); font-size: 12px; }
+.dayEstimate > strong { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .dailyDateButton { min-height: 40px; padding: 0; border: 0; color: var(--mint); background: transparent; font: inherit; cursor: pointer; }
 .dailyDateButton:hover { text-decoration: underline; text-underline-offset: 4px; }
 .dailyDateButton[aria-pressed="true"] { font-weight: 700; text-decoration: underline; text-underline-offset: 4px; }

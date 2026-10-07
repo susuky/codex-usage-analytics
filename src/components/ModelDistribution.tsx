@@ -4,6 +4,7 @@ import { ArrowUpRight, ChevronDown } from "lucide-react";
 import type { OverviewData, UsageFilter } from "../types";
 import { getOverview } from "../lib/api";
 import { useUsageData } from "../lib/data";
+import { emptyDailyUsage, formatDailyCost } from "../lib/daily";
 import { formatInteger, formatTokens } from "../lib/format";
 import styles from "./Dashboard.module.css";
 
@@ -27,6 +28,7 @@ export function ModelDistribution({ date, dates, onDateChange }: { date: string;
   const selected = request ? current?.data : data;
   const models = selected?.models ?? [];
   const total = selected?.totals.totalTokens ?? 0;
+  const day = date && selected ? selected.daily.find(item => item.date === date) ?? emptyDailyUsage(date) : null;
   const pending = Boolean(request && !current);
   const ranked = useMemo(() => [...models].sort((a, b) => b.tokens.totalTokens - a.tokens.totalTokens), [models]);
   const openSelectedDate = () => { if (request) setFilter(request); };
@@ -39,7 +41,12 @@ export function ModelDistribution({ date, dates, onDateChange }: { date: string;
       </select>
       {date ? <button className={styles.clearButton} onClick={() => onDateChange("")}>返回整個區間</button> : null}
     </div>
-    {selected ? <p className={styles.sectionHint}>{date ? <><strong className={styles.dayModelTotal}>{formatInteger(total)} Tokens</strong><br /></> : null}依 Token 用量排序 · {models.length} 個模型</p> : null}
+    {day ? <div className={styles.daySummary} role="region" aria-label="當日用量與估算">
+      <strong className={styles.dayModelTotal}>{formatInteger(total)} Tokens</strong>
+      <div className={styles.dayEstimate}><span>當日 API 等值估算</span><strong>{formatDailyCost(day)}</strong></div>
+      {day.unpricedTokens > 0 ? <small>{formatTokens(day.unpricedTokens)} Tokens 尚未定價</small> : null}
+    </div> : null}
+    {selected ? <p className={styles.sectionHint}>依 Token 用量排序 · {models.length} 個模型</p> : null}
     {pending ? <div className={styles.empty} role="status">正在載入當日模型用量…</div> : current?.failed ? <div className={styles.empty} role="status"><p>暫時無法載入當日模型用量。</p><button className="secondary-button" onClick={() => { setResult(null); setAttempt(value => value + 1); }}>重試</button></div> : total > 0 ? <ol className={styles.modelRanking}>{(expanded ? ranked : ranked.slice(0, 6)).map((model, index) => {
       const percent = model.tokens.totalTokens / total * 100;
       return <li key={model.model}>

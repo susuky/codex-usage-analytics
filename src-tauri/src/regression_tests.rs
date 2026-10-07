@@ -89,6 +89,75 @@ fn mixed_sessions_keep_paid_and_unknown_usage_separate_from_auto_review() {
 }
 
 #[test]
+fn daily_session_tokens_and_costs_match_overview_across_dates_models_and_sources() {
+    use chrono::{Local, NaiveDate, SecondsFormat, TimeZone, Utc};
+    let root = temp(); let path = root.join("usage.sqlite3");
+    let mut connection = db::open(&path).unwrap();
+    let mut settings = AppSettings::default();
+    let mut astra = settings.pricing_rules[0].clone();
+    astra.model = "gpt-6-astra".into(); astra.input_usd_per_million = 1.0;
+    settings.pricing_rules.push(astra);
+    db::save_settings(&connection, &settings).unwrap();
+    let midnight = Local.from_local_datetime(&NaiveDate::from_ymd_opt(2026, 9, 6).unwrap().and_hms_opt(0, 0, 0).unwrap()).earliest().unwrap();
+    let timestamp = |seconds| (midnight + chrono::Duration::seconds(seconds)).with_timezone(&Utc).to_rfc3339_opts(SecondsFormat::Millis, true);
+    let log = |records: &[(i64, &str, i64)]| {
+        let mut lines = vec![json!({"type":"session_meta","timestamp":timestamp(records[0].0),"payload":{"id":"daily-models","cwd":"C:/daily-test"}})];
+        for (second, model, total) in records {
+            lines.push(json!({"type":"turn_context","payload":{"model":model}}));
+            lines.push(json!({"type":"event_msg","timestamp":timestamp(*second),"payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":total,"total_tokens":total}}}}));
+        }
+        lines.into_iter().map(|line| line.to_string()+"\n").collect::<String>()
+    };
+    let local = parse_session(Cursor::new(log(&[(-1,"gpt-6-astra",1000),(0,"gpt-5.6-sol",200),(3600,"gpt-6-astra",300),(86399,"unknown-model",50),(86400,"gpt-6-astra",900)])), "local", "Local", "local").unwrap();
+    let remote = parse_session(Cursor::new(log(&[(7200,"gpt-6-astra",400)])), "ssh-test", "Remote", "ssh").unwrap();
+    let mut gap = parse_session(Cursor::new(log(&[(-1,"gpt-6-astra",500),(86400,"gpt-6-astra",500)])), "local", "Local", "local").unwrap();
+    gap.session_id = "no-usage-on-selected-day".into();
+    db::save_sessions(&mut connection, &[local, remote, gap]).unwrap();
+    let day = UsageFilter { days: 1, start_date: Some("2026-09-06".into()), end_date: Some("2026-09-06".into()), source_id: None, model: None, project: None };
+    for (filter, expected_tokens, expected_cost, expected_sessions) in [
+        (day.clone(), 950, 1500, 2),
+        (UsageFilter { model: Some("gpt-6-astra".into()), ..day.clone() }, 700, 700, 2),
+        (UsageFilter { model: Some("gpt-6-astra".into()), source_id: Some("local".into()), ..day.clone() }, 300, 300, 1),
+        (UsageFilter { project: Some("absent".into()), ..day.clone() }, 0, 0, 0),
+        (UsageFilter { start_date: Some("2026-09-05".into()), ..day.clone() }, 2450, 3000, 3),
+    ] {
+        let overview = crate::overview_for_path(&path, filter.clone()).unwrap();
+        let sessions = db::list_sessions(&connection, &filter).unwrap();
+        assert_eq!(sessions.len(), expected_sessions);
+        assert_eq!(sessions.iter().map(|session| session.tokens.total_tokens).sum::<i64>(), expected_tokens);
+        assert_eq!(sessions.iter().filter_map(|session| session.estimate_microusd).sum::<i64>(), expected_cost);
+        assert_eq!(overview.totals.total_tokens, expected_tokens);
+        assert_eq!(overview.estimate_microusd, expected_cost);
+        assert_eq!(overview.daily.iter().map(|day| day.estimate_microusd).sum::<i64>(), expected_cost);
+        assert_eq!(overview.daily.iter().map(|day| day.unpriced_tokens).sum::<i64>(), sessions.iter().map(|session| session.unpriced_tokens).sum::<i64>());
+        assert_eq!(overview.models.iter().map(|model| model.tokens.total_tokens).sum::<i64>(), expected_tokens);
+        if let Some(model) = filter.model { assert!(sessions.iter().all(|session| session.model == model)); }
+    }
+    let sessions = db::list_sessions(&connection, &day).unwrap();
+    let local = sessions.iter().find(|session| session.source_id == "local").unwrap();
+    assert_eq!(local.model, "多個模型");
+    assert_eq!(local.unpriced_turn_count, 1);
+    assert_eq!(local.unpriced_tokens, 50);
+    assert_eq!(local.token_event_count, 3);
+    assert_eq!(local.started_at, timestamp(0));
+    assert_eq!(local.ended_at, timestamp(86399));
+    let unknown = db::list_sessions(&connection, &UsageFilter { model: Some("unknown-model".into()), ..day }).unwrap();
+    assert_eq!(unknown[0].estimate_microusd, None);
+    assert_eq!(unknown[0].tokens.total_tokens, 50);
+    let complete = db::get_session(&connection, "local", "daily-models").unwrap();
+    assert_eq!(complete.tokens.total_tokens, 2450);
+    assert_eq!(complete.turns.as_ref().unwrap().len(), 5);
+    let snapshots = db::list_sync_sessions(&connection).unwrap();
+    let snapshot = snapshots.iter().find(|session| session.source_id == "local" && session.session_id == "daily-models").unwrap();
+    assert_eq!(snapshot.tokens, complete.tokens);
+    assert_eq!(snapshot.model, complete.model);
+    assert_eq!(snapshot.ended_at, complete.ended_at);
+    assert_eq!(snapshot.token_event_count, complete.token_event_count);
+    assert_eq!(snapshot.estimate_microusd, complete.estimate_microusd);
+    assert_eq!(snapshot.unpriced_tokens, complete.unpriced_tokens);
+}
+
+#[test]
 fn resets_and_missing_last_reconcile_everywhere_and_remain_idempotent() {
     let root=temp(); let mut connection=db::open(&root.join("usage.sqlite3")).unwrap();
     let parsed=parse_session(Cursor::new(fixture()),"local","Local","local").unwrap();
@@ -107,7 +176,7 @@ fn resets_and_missing_last_reconcile_everywhere_and_remain_idempotent() {
     assert_eq!(db::get_session(&connection,"local","regression").unwrap().turns.unwrap()[0].timestamp,parsed.turns.unwrap()[0].timestamp);
 }
 #[test]
-fn imported_older_copies_are_quiet_but_conflicting_or_incomplete_snapshots_warn() {
+fn imported_older_copies_are_quiet_but_conflicting_or_incomplete_snapshots_are_retained() {
     let root = temp(); let mut connection = db::open(&root.join("usage.sqlite3")).unwrap();
     let original = parse_session(Cursor::new(fixture()), "local", "Local", "local").unwrap();
     assert_eq!(db::save_sessions(&mut connection, &[original.clone()]).unwrap(), 0);
@@ -160,7 +229,7 @@ fn fresh_settings_have_no_remote_and_saved_sources_survive_loading() {
 #[test]
 fn startup_and_zero_price_and_cloud_queue_survive_reopening() {
     let root=temp(); let path=root.join("usage.sqlite3"); let connection=db::open(&path).unwrap();
-    let mut source=UsageSource { id:"ssh-test".into(),name:"Test".into(),kind:"ssh".into(),target:None,enabled:false,stale:true,last_scanned_at:Some("2026-09-05T00:00:00Z".into()),last_error:Some("offline".into()),session_count:0,latest_data_at:None };
+    let mut source=UsageSource { id:"ssh-test".into(),name:"Test".into(),kind:"ssh".into(),target:None,enabled:false,stale:true,last_scanned_at:Some("2026-09-05T00:00:00Z".into()),last_error:Some("offline".into()),last_notice:None,session_count:0,latest_data_at:None };
     db::upsert_source(&connection,&source).unwrap();
     source.last_scanned_at=None; source.last_error=None; source.enabled=true;
     db::ensure_source(&connection,&source).unwrap();
@@ -260,6 +329,66 @@ fn model_parser_upgrade_reparses_unchanged_logs_without_losing_usage() {
     assert_eq!(saved.tokens.total_tokens, 300);
     assert_eq!(saved.turns.unwrap().iter().map(|turn| turn.model.as_str()).collect::<Vec<_>>(), vec!["gpt-6-astra", "codex-auto-review"]);
     assert!(crate::scanner::scan_local(&root, &mut connection, false).unwrap().sessions.is_empty());
+}
+
+#[test]
+fn retained_local_history_is_checkpointed_without_hiding_unreadable_logs() {
+    let root = temp(); let path = root.join("usage.sqlite3");
+    std::fs::create_dir(root.join("sessions")).unwrap();
+    let log_path = root.join("sessions/retained.jsonl");
+    std::fs::write(&log_path, fixture()).unwrap();
+    let mut connection = db::open(&path).unwrap();
+    crate::scanner::scan_local(&root, &mut connection, false).unwrap();
+    let original = db::get_session(&connection, "local", "regression").unwrap();
+    let compacted = [
+        json!({"type":"session_meta","timestamp":"2026-09-05T01:00:00Z","payload":{"id":"regression","history_mode":"paginated"}}),
+        json!({"type":"compacted","timestamp":"2026-09-05T01:00:00Z","payload":{}}),
+        json!({"type":"event_msg","timestamp":"2026-09-05T01:00:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":485,"total_tokens":485},"last_token_usage":{"input_tokens":100,"total_tokens":100}}}}),
+    ].into_iter().map(|line| line.to_string()+"\n").collect::<String>();
+    let compacted = compacted + "\0\0\0\n";
+    std::fs::write(&log_path, &compacted).unwrap();
+    let scan = crate::scanner::scan_local(&root, &mut connection, false).unwrap();
+    assert_eq!((scan.skipped_files, scan.retained_sessions), (0, 1));
+    let saved = db::get_session(&connection, "local", "regression").unwrap();
+    assert_eq!(saved.tokens, original.tokens);
+    assert_eq!(saved.estimate_microusd, original.estimate_microusd);
+    assert_eq!(serde_json::to_value(saved.turns).unwrap(), serde_json::to_value(&original.turns).unwrap());
+    assert!(crate::scanner::scan_local(&root, &mut connection, false).unwrap().sessions.is_empty());
+    std::fs::write(&log_path, compacted + "{broken\n").unwrap();
+    for _ in 0..2 {
+        let scan = crate::scanner::scan_local(&root, &mut connection, false).unwrap();
+        assert_eq!(scan.skipped_files, 1);
+        assert_eq!(db::get_session(&connection, "local", "regression").unwrap().tokens, original.tokens);
+    }
+}
+
+#[test]
+fn source_notice_upgrade_preserves_errors_until_a_successful_scan() {
+    let root = temp(); let path = root.join("usage.sqlite3");
+    let connection = db::open(&path).unwrap();
+    let mut source = crate::source("local", "Local", "local", None, true);
+    source.stale = true; source.last_error = Some("legacy scan warning".into());
+    db::upsert_source(&connection, &source).unwrap();
+    connection.execute("ALTER TABLE sources DROP COLUMN last_notice", []).unwrap();
+    drop(connection);
+    let connection = db::open(&path).unwrap();
+    let mut source = db::list_sources(&connection).unwrap().remove(0);
+    assert_eq!(source.last_error.as_deref(), Some("legacy scan warning"));
+    assert_eq!(source.last_notice, None);
+    crate::update_scan_status(&mut source, 0, 3, "2026-10-07T01:00:00Z");
+    db::upsert_source(&connection, &source).unwrap();
+    drop(connection);
+    let connection = db::open(&path).unwrap();
+    let mut source = db::list_sources(&connection).unwrap().remove(0);
+    assert!(!source.stale);
+    assert_eq!(source.last_error, None);
+    assert_eq!(source.last_notice.as_deref(), Some("3 段對話的歷史用量已保留。"));
+    assert_eq!(source.last_scanned_at.as_deref(), Some("2026-10-07T01:00:00Z"));
+    crate::update_scan_status(&mut source, 1, 3, "2026-10-07T02:00:00Z");
+    assert!(source.stale);
+    assert!(source.last_error.unwrap().starts_with("1 份紀錄無法完整讀取"));
+    assert_eq!(source.last_scanned_at.as_deref(), Some("2026-10-07T01:00:00Z"));
+    assert!(source.last_notice.is_some());
 }
 
 #[test]
@@ -407,6 +536,37 @@ fn cloud_reconciliation_preserves_activity_when_a_download_later_becomes_local()
     assert_eq!(activity_rows(&connection), activity);
     assert_eq!(db::get_session(&connection, "local", "regression").unwrap().tokens, incoming.tokens);
     assert_eq!(connection.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+}
+
+#[cfg(windows)]
+#[test]
+fn nul_padding_and_damaged_records_are_distinguished_by_all_scanners() {
+    let root = temp(); std::fs::create_dir(root.join("sessions")).unwrap();
+    let padding = fixture().replace("regression", "padding") + " \0\t\0 \n";
+    let damaged = fixture().replace("regression", "damaged") + "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\"}\0\n";
+    for (name, log, complete) in [("padding", padding, true), ("damaged", damaged, false)] {
+        std::fs::write(root.join(format!("sessions/{name}.jsonl")), &log).unwrap();
+        let local = parse_session(Cursor::new(log), "local", "Local", "local").unwrap();
+        assert_eq!(local.scan_complete, complete);
+        assert_eq!(local.tokens.total_tokens, 485);
+    }
+    let python = format!("SINCE_ISO = ''\nCODEX_HOME = {}\n{}", serde_json::to_string(&root.to_string_lossy()).unwrap(), include_str!("remote_scan.py"));
+    let powershell = format!("$SinceIso = ''\n$CodexHome = '{}'\n{}", root.display(), include_str!("remote_scan.ps1"));
+    for (program, script) in [("python", python), ("powershell.exe", powershell)] {
+        let mut command = std::process::Command::new(program);
+        if program == "python" { command.arg("-"); }
+        else { command.args(crate::ssh::windows_script_command(script.len()).split_whitespace().skip(1)); }
+        let output = bounded_output(&mut command, script.into_bytes(), Duration::from_secs(45)).unwrap();
+        assert!(output.status.success(), "{program}: {}", String::from_utf8_lossy(&output.stderr));
+        let rows: Vec<serde_json::Value> = String::from_utf8(output.stdout).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[2]["scanSummary"]["skippedFiles"], 1);
+        for row in &rows[..2] {
+            let session: SessionAggregate = serde_json::from_value(row.clone()).unwrap();
+            assert_eq!(session.scan_complete, session.session_id == "padding", "{program}: {}", session.session_id);
+            assert_eq!(session.tokens.total_tokens, 485);
+        }
+    }
 }
 
 #[cfg(windows)]

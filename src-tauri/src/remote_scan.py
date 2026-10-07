@@ -118,7 +118,7 @@ def parse_file(path):
             try:
                 value = json.loads(line)
             except (ValueError, TypeError):
-                if line.strip():
+                if line.replace("\x00", "").strip():
                     scan_complete = False
                 continue
             if not isinstance(value, dict):

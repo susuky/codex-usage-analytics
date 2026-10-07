@@ -31,16 +31,16 @@ pub fn scan_local(codex_home: &Path, connection: &mut Connection, force_full: bo
     let mut sessions: Vec<_> = sessions.into_values().collect();
     let rules = crate::db::load_settings(connection)?.pricing_rules;
     crate::pricing::reprice_sessions(&mut sessions, &rules);
-    let retained = crate::db::save_sessions(connection, &sessions)?;
-    skipped_files += retained;
-    if retained > 0 { checkpoints.clear(); }
+    let retained_sessions = crate::db::save_sessions(connection, &sessions)?;
+    // Keeping previously imported history is a completed import decision. A
+    // readable, unchanged compacted log need not be retried until it changes.
     // Checkpoints advance only after the corresponding aggregates are committed.
     let tx = connection.transaction().map_err(|e| e.to_string())?;
     for (key, size, modified) in checkpoints {
         tx.execute("INSERT INTO file_checkpoints VALUES(?1,?2,?3) ON CONFLICT(file_key) DO UPDATE SET size=excluded.size,modified=excluded.modified", params![key,size,modified]).map_err(|e| e.to_string())?;
     }
     tx.commit().map_err(|e| e.to_string())?;
-    Ok(ScanBatch { sessions, skipped_files })
+    Ok(ScanBatch { sessions, skipped_files, retained_sessions })
 }
 
 #[cfg(test)]

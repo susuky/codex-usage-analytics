@@ -1,7 +1,7 @@
 import { createClient, type Session, type SupportedStorage, type SupabaseClient } from "@supabase/supabase-js";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
-import { getOverview, getSessionDetail, getSettings, getSyncState, saveSyncState, mergeCloudSessions, saveSettings, secureGet, secureRemove, secureSet } from "./api";
+import { listSyncSessions, getSessionDetail, getSettings, getSyncState, saveSyncState, mergeCloudSessions, saveSettings, secureGet, secureRemove, secureSet } from "./api";
 import { downloadPayload, fingerprint, localKey, queueSnapshots, remoteFingerprint, uploadPayload, type CloudSnapshot, type SessionRow } from "./cloudSync";
 import { useUsageData } from "./data";
 import type { OverviewData, SyncStatus } from "../types";
@@ -77,7 +77,7 @@ export function CloudProvider({ children }: { children: ReactNode }) {
       const signal = abort.signal;
       setStatus((current) => ({ ...current, syncing:true, lastError:null }));
       try {
-        const state = queueSnapshots(await getSyncState(account), (await getOverview({ days:36500 })).sessions);
+        const state = queueSnapshots(await getSyncState(account), await listSyncSessions());
         await saveSyncState(account,state);
         setStatus((current) => ({ ...current,pendingRows:Object.keys(state.pending).length,lastSyncedAt:state.lastSyncedAt }));
         if (!automatic) {
@@ -88,8 +88,8 @@ export function CloudProvider({ children }: { children: ReactNode }) {
           if (result.error) throw result.error;
           if (result.data?.paused) throw new Error("雲端統計已清除；按立即同步可重新啟用");
         }
-        const overview = await getOverview({ days:36500 });
-        for (const item of overview.sessions.filter((s) => s.sourceKind !== "cloud" && state.pending[localKey(s)])) {
+        const sessions = await listSyncSessions();
+        for (const item of sessions.filter((s) => s.sourceKind !== "cloud" && state.pending[localKey(s)])) {
           signal.throwIfAborted();
           const detail = await getSessionDetail(item.sourceId,item.sessionId);
           const result = await client!.rpc("sync_usage_session_v3", await uploadPayload(account,detail)).abortSignal(signal);

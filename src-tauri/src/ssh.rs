@@ -21,6 +21,7 @@ const MAX_RECORD_BYTES: u64 = 32 * 1024 * 1024;
 pub struct RemoteScanSummary {
     pub scanned_sessions: usize,
     pub skipped_files: usize,
+    pub retained_sessions: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,7 +327,7 @@ fn consume_aggregates<R: BufRead, F: FnMut(SessionAggregate) -> Result<usize, St
     mut reader: R, source_id: &str, source_name: &str, mut on_session: F,
 ) -> Result<RemoteScanSummary, String> {
     let mut sessions: HashMap<String, (i64, i64)> = HashMap::new();
-    let mut rejected = HashSet::new();
+    let mut retained = HashSet::new();
     let mut invalid_lines = 0;
     let mut summary = None;
     let mut line = Vec::new();
@@ -364,13 +365,13 @@ fn consume_aggregates<R: BufRead, F: FnMut(SessionAggregate) -> Result<usize, St
         if sessions.get(&key).is_some_and(|current| *current >= revision) { continue; }
         sessions.insert(key.clone(), revision);
         if on_session(parsed)? > 0 {
-            rejected.insert(key);
+            retained.insert(key);
         } else {
-            rejected.remove(&key);
+            retained.remove(&key);
         }
     }
     let skipped = summary.ok_or_else(|| "遠端掃描未完整結束，已保留完成的統計；請重試".to_string())?;
-    Ok(RemoteScanSummary { scanned_sessions: sessions.len(), skipped_files: skipped + invalid_lines + rejected.len() })
+    Ok(RemoteScanSummary { scanned_sessions: sessions.len(), skipped_files: skipped + invalid_lines, retained_sessions: retained.len() })
 }
 
 #[cfg(test)]
@@ -400,6 +401,26 @@ mod tests {
         assert_eq!(received, ["one", "two"]);
         assert_eq!(result.scanned_sessions, 2);
         assert_eq!(result.skipped_files, 1);
+    }
+
+    #[test]
+    fn retained_history_is_separate_from_unreadable_remote_records() {
+        let path = std::env::temp_dir().join(format!("codex-retained-stream-{}.sqlite3", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let mut connection = crate::db::open(&path).unwrap();
+        let record = sample_record("one");
+        let mut original: SessionAggregate = serde_json::from_str(&record).unwrap();
+        original.source_id = "remote".into();
+        crate::db::save_sessions(&mut connection, &[original.clone()]).unwrap();
+        let compacted = record.replace("2026-09-05T00:00:01Z", "2026-09-05T00:00:00Z");
+        let input = format!("{compacted}{compacted}{{broken\n{}{{\"scanSummary\":{{\"skippedFiles\":1}}}}\n", sample_record("two"));
+        let scan = consume_aggregates(Cursor::new(input), "remote", "Remote", |session| crate::db::save_sessions(&mut connection, &[session])).unwrap();
+        assert_eq!(scan.scanned_sessions, 2);
+        assert_eq!(scan.retained_sessions, 1);
+        assert_eq!(scan.skipped_files, 2);
+        let saved = crate::db::get_session(&connection, "remote", "one").unwrap();
+        assert_eq!(saved.tokens, original.tokens);
+        assert_eq!(saved.turns.unwrap()[0].timestamp, "2026-09-05T00:00:01Z");
+        assert_eq!(crate::db::get_session(&connection, "remote", "two").unwrap().tokens.total_tokens, 100);
     }
 
     #[test]

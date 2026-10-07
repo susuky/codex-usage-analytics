@@ -111,6 +111,7 @@ fn scan_complete_default() -> bool { true }
 pub struct ScanBatch {
     pub sessions: Vec<SessionAggregate>,
     pub skipped_files: usize,
+    pub retained_sessions: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -163,6 +164,7 @@ pub struct UsageSource {
     pub stale: bool,
     pub last_scanned_at: Option<String>,
     pub last_error: Option<String>,
+    pub last_notice: Option<String>,
     pub session_count: i64,
     pub latest_data_at: Option<String>,
 }
@@ -177,6 +179,7 @@ pub struct DailyUsage {
     pub output: i64,
     pub unclassified: i64,
     pub estimate_microusd: i64,
+    pub unpriced_tokens: i64,
     pub sessions: i64,
 }
 
@@ -221,7 +224,6 @@ pub struct ActivityOverview {
     pub reasoning_tokens: i64,
     pub fast_requests: i64,
     pub fast_tokens: i64,
-    pub weighted_usage_requests: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

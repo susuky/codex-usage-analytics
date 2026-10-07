@@ -1,11 +1,11 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { webcrypto } from "node:crypto";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import type { OverviewData, SessionAggregate, StoredSyncState } from "../types";
+import type { SessionAggregate, StoredSyncState } from "../types";
 import { fingerprint, localKey, remoteFingerprint, uploadPayload, type CloudSnapshot } from "./cloudSync";
 
 const mocks = vi.hoisted(() => ({
-  createClient: vi.fn(), getOverview: vi.fn(), getSettings: vi.fn(), getSyncState: vi.fn(),
+  createClient: vi.fn(), listSyncSessions: vi.fn(), getSettings: vi.fn(), getSyncState: vi.fn(),
   saveSyncState: vi.fn(), mergeCloudSessions: vi.fn(), rpc: vi.fn(), from: vi.fn(), reload: vi.fn(),
 }));
 vi.mock("@supabase/supabase-js", () => ({ createClient: mocks.createClient }));
@@ -80,7 +80,7 @@ async function syncAgain() {
 }
 
 it.each(["local", "cloud"] as const)("downloads equal-total corrections for %s sessions and skips unchanged content", async (kind) => {
-  mocks.getOverview.mockResolvedValue({ sessions: [{ ...local, sourceKind: kind }] } as OverviewData);
+  mocks.listSyncSessions.mockResolvedValue([{ ...local, sourceKind: kind }]);
   state.acknowledged[`remote:${snapshot.session.session_key}`] = remoteFingerprint(snapshot.session);
   snapshot.session.input_tokens -= 20;
   snapshot.session.output_tokens += 20;
@@ -102,7 +102,7 @@ it.each(["local", "cloud"] as const)("downloads equal-total corrections for %s s
 });
 
 it("retries a failed merge without acknowledging the unimported snapshot", async () => {
-  mocks.getOverview.mockResolvedValue({ sessions: [local] } as OverviewData);
+  mocks.listSyncSessions.mockResolvedValue([local]);
   mocks.mergeCloudSessions.mockRejectedValueOnce(new Error("merge failed"));
   render(<CloudProvider><Probe /></CloudProvider>);
   await waitFor(() => expect(screen.getByText("merge failed")).toBeVisible());
@@ -113,7 +113,7 @@ it("retries a failed merge without acknowledging the unimported snapshot", async
 });
 
 it("acknowledges the fetched revision when the cloud changes after listing", async () => {
-  mocks.getOverview.mockResolvedValue({ sessions: [local] } as OverviewData);
+  mocks.listSyncSessions.mockResolvedValue([local]);
   mocks.rpc.mockImplementation((name) => ({ abortSignal: async () => {
     if (name === "get_usage_session_v3") snapshot.session.sync_revision = "updated-after-listing";
     return { data: name === "get_usage_session_v3" ? structuredClone(snapshot) : true, error: null };

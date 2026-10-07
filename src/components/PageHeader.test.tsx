@@ -32,6 +32,13 @@ it("reports loading before source settings are known", () => {
   expect(screen.queryByText("未啟用來源")).not.toBeInTheDocument();
 });
 
+it("does not mark preserved history as a source awaiting updates", () => {
+  state.data!.sources = [{ ...state.data!.sources[0], stale: false, lastError: null, lastNotice: "3 段對話的歷史用量已保留。" }];
+  renderHeader();
+  expect(screen.getByRole("link", { name: "查看來源狀態：資料已更新" })).toBeVisible();
+  expect(screen.queryByText("來源待更新")).not.toBeInTheDocument();
+});
+
 it("keeps an actionable warning while technical details are collapsed", () => {
   state.error = "diagnostic detail";
   const { container } = renderHeader();

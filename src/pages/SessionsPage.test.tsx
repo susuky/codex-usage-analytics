@@ -47,14 +47,17 @@ it("retains unavailable URL filters and offers a way to clear them", async () =>
   expect(screen.getByRole("heading", { name: "42 個 Sessions" })).toBeVisible();
 });
 
-it("uses turn-aware model matches even when the session model differs", async () => {
-  const session = { ...state.data!.sessions[0], model: "gpt-5.6-terra" };
+it("shows the requested model's period usage and keeps mixed-model labels out of the filter", async () => {
+  state.data!.sessions[0].model = "多個模型";
+  const session = { ...state.data!.sessions[0], model: "gpt-5.6-sol", tokens: { ...state.data!.sessions[0].tokens, totalTokens: 1234 } };
   queryModel.mockResolvedValue([session]);
   const { container } = render(<MemoryRouter initialEntries={["/sessions?model=gpt-5.6-sol"]}><SessionsPage /></MemoryRouter>);
   expect(await screen.findByRole("heading", { name: "1 個 Sessions" })).toBeVisible();
   expect(queryModel).toHaveBeenCalledWith({ days: 365, model: "gpt-5.6-sol" });
-  expect(container.querySelector("tbody")).toHaveTextContent("gpt-5.6-terra");
-  expect(screen.getByText(/整段對話的累計用量/)).toBeVisible();
+  expect(container.querySelector("tbody")).toHaveTextContent("gpt-5.6-sol");
+  expect(screen.getByRole("region", { name: "篩選結果摘要" })).toHaveTextContent("1.2K");
+  expect(screen.queryByRole("option", { name: "多個模型" })).not.toBeInTheDocument();
+  expect(screen.getByText(/列表依所選日期與模型計算/)).toBeVisible();
 });
 
 it("ignores a previous model response that arrives after a new filter", async () => {

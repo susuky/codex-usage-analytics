@@ -35,14 +35,6 @@ pub fn is_fast_tier(service_tier: &str) -> bool {
     matches!(service_tier.trim().to_ascii_lowercase().as_str(), "priority" | "fast")
 }
 
-pub fn chatgpt_usage_multiplier(model: &str, service_tier: &str) -> f64 {
-    if !is_fast_tier(service_tier) { return 1.0; }
-    let normalized = model.trim().to_ascii_lowercase();
-    if normalized == "gpt-5.4" || normalized.starts_with("gpt-5.4-") { 2.0 }
-    else if normalized == "gpt-5.5" || normalized.starts_with("gpt-5.5-") || normalized == "gpt-5.6" || normalized.starts_with("gpt-5.6-") { 2.5 }
-    else { 1.0 }
-}
-
 #[cfg(test)]
 pub fn estimate_with_rules(model: &str, tokens: &TokenBreakdown, rules: &[PricingRule]) -> Option<i64> {
     estimate_with_rules_for_tier(model, tokens, "default", rules)
@@ -235,14 +227,6 @@ mod tests {
         assert_eq!(estimate_with_rules("gpt-5.4", &usage, &rules), Some(220_000));
         assert_eq!(estimate_with_rules("gpt-5.5", &usage, &rules), Some(440_000));
         assert_eq!(estimate_with_rules("gpt-5.4-2026-03-05", &usage, &rules), Some(220_000));
-    }
-
-    #[test]
-    fn chatgpt_fast_usage_multiplier_depends_on_model() {
-        assert_eq!(chatgpt_usage_multiplier("gpt-5.6-sol", "priority"), 2.5);
-        assert_eq!(chatgpt_usage_multiplier("gpt-5.5", "priority"), 2.5);
-        assert_eq!(chatgpt_usage_multiplier("gpt-5.4", "priority"), 2.0);
-        assert_eq!(chatgpt_usage_multiplier("gpt-5.6-sol", "default"), 1.0);
     }
 
     #[test]

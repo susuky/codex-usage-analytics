@@ -42,7 +42,7 @@ fn codex_home(settings: &AppSettings) -> Result<PathBuf, String> {
 }
 
 fn source(id: &str, name: &str, kind: &str, target: Option<String>, enabled: bool) -> UsageSource {
-    UsageSource { id: id.into(), name: name.into(), kind: kind.into(), target, enabled, stale: false, last_scanned_at: None, last_error: None, session_count: 0, latest_data_at: None }
+    UsageSource { id: id.into(), name: name.into(), kind: kind.into(), target, enabled, stale: false, last_scanned_at: None, last_error: None, last_notice: None, session_count: 0, latest_data_at: None }
 }
 
 #[tauri::command]
@@ -64,7 +64,7 @@ fn scan_sources_blocking(db_path: PathBuf, force_full: bool) -> Result<ScanResul
     match scanner::scan_local(&codex_home(&settings)?, &mut connection, force_full) {
         Ok(batch) => {
             scanned_sessions += batch.sessions.len() as i64;
-            update_scan_status(&mut local_source, batch.skipped_files, &scanned_at);
+            update_scan_status(&mut local_source, batch.skipped_files, batch.retained_sessions, &scanned_at);
         }
         Err(error) => { local_source.stale = true; local_source.last_error = Some(error); }
     }
@@ -92,7 +92,7 @@ fn scan_sources_blocking(db_path: PathBuf, force_full: bool) -> Result<ScanResul
                 match result {
                     Ok(batch) if item.enabled => {
                         count = batch.scanned_sessions as i64;
-                        update_scan_status(&mut item, batch.skipped_files, &scanned_at);
+                        update_scan_status(&mut item, batch.skipped_files, batch.retained_sessions, &scanned_at);
                     },
                     Err(error) => { item.stale = true; item.last_error = Some(error); },
                     _ => {},
@@ -113,9 +113,10 @@ fn scan_sources_blocking(db_path: PathBuf, force_full: bool) -> Result<ScanResul
     Ok(ScanResult { sources, scanned_sessions, scanned_at })
 }
 
-fn update_scan_status(source: &mut UsageSource, skipped: usize, at: &str) {
+fn update_scan_status(source: &mut UsageSource, skipped: usize, retained: usize, at: &str) {
     source.stale = skipped > 0;
-    source.last_error = (skipped > 0).then(|| format!("{skipped} 份紀錄未能更新，已保留先前統計，下一次掃描會重試"));
+    source.last_error = (skipped > 0).then(|| format!("{skipped} 份紀錄無法完整讀取；可用紀錄已更新，既有統計已保留。"));
+    source.last_notice = (retained > 0).then(|| format!("{retained} 段對話的歷史用量已保留。"));
     if skipped == 0 { source.last_scanned_at = Some(at.into()); }
 }
 
@@ -128,6 +129,12 @@ async fn test_ssh_source(target: String, codex_home: Option<String>) -> Result<S
 async fn list_sessions(state: State<'_, AppState>, filter: UsageFilter) -> Result<Vec<SessionAggregate>, String> {
     let path = state.db_path.clone();
     run_blocking(move || db::list_sessions(&db::open(&path)?, &filter)).await
+}
+
+#[tauri::command]
+async fn list_sync_sessions(state: State<'_, AppState>) -> Result<Vec<SessionAggregate>, String> {
+    let path = state.db_path.clone();
+    run_blocking(move || db::list_sync_sessions(&db::open(&path)?)).await
 }
 
 #[tauri::command]
@@ -166,13 +173,14 @@ fn overview_for_path(path: &std::path::Path, filter: UsageFilter) -> Result<Over
         let date = DateTime::parse_from_rfc3339(&turn.timestamp)
             .map(|value| value.with_timezone(&Local).format("%Y-%m-%d").to_string())
             .unwrap_or_else(|_| turn.timestamp.get(0..10).unwrap_or(&turn.timestamp).to_string());
-        let daily = daily_map.entry(date.clone()).or_insert(DailyUsage { date: date.clone(), uncached_input: 0, cached_input: 0, cache_write_input: 0, output: 0, unclassified: 0, estimate_microusd: 0, sessions: 0 });
+        let daily = daily_map.entry(date.clone()).or_insert(DailyUsage { date: date.clone(), uncached_input: 0, cached_input: 0, cache_write_input: 0, output: 0, unclassified: 0, estimate_microusd: 0, unpriced_tokens: 0, sessions: 0 });
         daily.cached_input += turn.tokens.cached_input_tokens;
         daily.cache_write_input += turn.tokens.cache_write_input_tokens;
         daily.uncached_input += (turn.tokens.input_tokens - turn.tokens.cached_input_tokens - turn.tokens.cache_write_input_tokens).max(0);
         daily.output += turn.tokens.output_tokens;
         daily.unclassified += (turn.tokens.total_tokens - turn.tokens.input_tokens - turn.tokens.output_tokens).max(0);
         daily.estimate_microusd += turn.estimate_microusd.unwrap_or_default();
+        if turn.estimate_microusd.is_none() { daily.unpriced_tokens += turn.tokens.total_tokens; }
         daily_sessions.entry(date).or_default().insert(session_key.clone());
         let model = model_map.entry(turn.model.clone()).or_insert(ModelUsage {
             model: turn.model.clone(),
@@ -334,7 +342,7 @@ pub fn run() {
             { use tauri_plugin_deep_link::DeepLinkExt; app.deep_link().register_all()?; }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![scan_sources, test_ssh_source, list_sessions, get_session_detail, get_overview, get_settings, save_settings, get_pricing_status, refresh_pricing, open_pricing_docs, secure_get, secure_set, secure_remove, get_sync_state, save_sync_state, merge_cloud_sessions])
+        .invoke_handler(tauri::generate_handler![scan_sources, test_ssh_source, list_sessions, list_sync_sessions, get_session_detail, get_overview, get_settings, save_settings, get_pricing_status, refresh_pricing, open_pricing_docs, secure_get, secure_set, secure_remove, get_sync_state, save_sync_state, merge_cloud_sessions])
         .run(tauri::generate_context!())
         .expect("error while running Codex usage analytics");
 }

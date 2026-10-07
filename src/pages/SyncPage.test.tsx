@@ -29,6 +29,24 @@ it("labels the successful scan separately from the latest token timestamp", () =
   expect(screen.getByText(/資料最新至/)).toBeVisible();
 });
 
+it("shows retained history as information while the source remains healthy", () => {
+  state.data!.sources = [{ ...state.data!.sources[0], stale: false, lastError: null, lastNotice: "3 段對話的歷史用量已保留。" }];
+  const { container } = renderPage();
+  expect(screen.getByText("正常")).toBeVisible();
+  expect(screen.getByText("3 段對話的歷史用量已保留。")).toBeVisible();
+  expect(screen.queryByText("需要處理")).not.toBeInTheDocument();
+  expect(container.querySelector("details")).toBeNull();
+});
+
+it("keeps a genuine read failure visible alongside retained history", () => {
+  state.data!.sources = [{ ...state.data!.sources[0], stale: true, lastError: "1 份紀錄無法完整讀取", lastNotice: "3 段對話的歷史用量已保留。" }];
+  renderPage();
+  expect(screen.getByText("需要處理")).toBeVisible();
+  expect(screen.getByText("3 段對話的歷史用量已保留。")).toBeVisible();
+  fireEvent.click(screen.getByText("查看問題詳情"));
+  expect(screen.getByText("1 份紀錄無法完整讀取")).toBeVisible();
+});
+
 it("keeps stale and disabled sources distinct from healthy sources", () => {
   const source = state.data!.sources[0];
   state.data!.sources = [{ ...source, stale: true, lastError: null }, { ...source, id: "disabled", enabled: false, lastError: "old error" }];

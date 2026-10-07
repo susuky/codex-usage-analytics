@@ -151,7 +151,9 @@ pub fn parse_session<R: BufRead>(reader: R, source_id: &str, source_name: &str, 
 
     for line_result in reader.lines() {
         let line = match line_result { Ok(value) => value, Err(_) => { scan_complete = false; break; } };
-        if line.trim().is_empty() { continue; }
+        // Some rollout files contain blank regions filled with NUL bytes.
+        // Only a wholly empty/padded line is ignorable; damaged JSON still warns.
+        if line.chars().all(|ch| ch.is_whitespace() || ch == '\0') { continue; }
         let value: Value = match serde_json::from_str(&line) { Ok(value) => value, Err(_) => { scan_complete = false; continue; } };
         let timestamp = value.get("timestamp").and_then(Value::as_str).unwrap_or_default().to_string();
         match value.get("type").and_then(Value::as_str) {

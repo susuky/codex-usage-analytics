@@ -1,4 +1,5 @@
 import type { DailyUsage } from "../types";
+import { formatCost } from "./format";
 
 export const emptyDailyUsage = (date: string): DailyUsage => ({
   date,
@@ -8,6 +9,7 @@ export const emptyDailyUsage = (date: string): DailyUsage => ({
   output: 0,
   unclassified: 0,
   estimateMicrousd: 0,
+  unpricedTokens: 0,
   sessions: 0
 });
 
@@ -63,4 +65,13 @@ export function fillDailyDateRange(daily: DailyUsage[], startDate: string, endDa
 export function dailyTokenTotal(day?: DailyUsage): number {
   if (!day) return 0;
   return day.uncachedInput + day.cachedInput + day.cacheWriteInput + day.output + day.unclassified;
+}
+
+export function dailyEstimate(day: DailyUsage): number | null {
+  return day.unpricedTokens > 0 && day.unpricedTokens >= dailyTokenTotal(day) ? null : day.estimateMicrousd;
+}
+
+export function formatDailyCost(day: DailyUsage): string {
+  const estimate = dailyEstimate(day);
+  return `${formatCost(estimate)}${estimate !== null && day.unpricedTokens > 0 ? "（部分）" : ""}`;
 }

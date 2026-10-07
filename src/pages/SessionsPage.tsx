@@ -31,7 +31,7 @@ export function SessionsPage() {
   const selectedModel = modelResult?.request === modelRequest ? modelResult : null;
   const sessions = view.model ? selectedModel?.rows : data?.sessions;
   const rows = useMemo(() => filterSessions(sessions ?? [], { ...view, model: "" }), [sessions, view.query, view.source, view.pricing]);
-  const models = useMemo(() => [...new Set([...(data?.models ?? []).map(item => item.model), ...(data?.sessions ?? []).map(session => session.model)])].sort(), [data]);
+  const models = useMemo(() => (data?.models ?? []).map(item => item.model).sort(), [data]);
   const pending = loading && !data || Boolean(data && view.model && !selectedModel);
   const queryError = view.model ? selectedModel?.error : null;
   const totals = useMemo(() => rows.reduce((sum, session) => ({
@@ -105,7 +105,7 @@ export function SessionsPage() {
         </div>
       ) : <>
         <div className={styles.sessionSummary} role="region" aria-label="篩選結果摘要">
-          <span>符合紀錄的總 Tokens<strong>{formatTokens(totals.tokens)}</strong></span>
+          <span>所選期間 Tokens<strong>{formatTokens(totals.tokens)}</strong></span>
           <span>API 等值估算<strong>{totals.tokens ? formatCost(totals.priced ? totals.estimate : null) : "無使用量"}</strong>
             {totals.unpriced > 0 ? <small>另有 {formatTokens(totals.unpriced)} tokens 未定價</small> : null}
           </span>
@@ -133,7 +133,7 @@ export function SessionsPage() {
             </div>
           )}
         </section>
-        <p className="footnote">列表與摘要為整段對話的累計用量；區間用量請看總覽。估算只包含已定價用量，不代表 Codex 訂閱帳單。零用量紀錄不列入估算狀態篩選。</p>
+        <p className="footnote">列表依所選日期與模型計算，與總覽使用相同範圍。點進明細可查看整段對話。估算只包含已定價用量，不代表 Codex 訂閱帳單。</p>
       </>}
     </div>
   </div>;

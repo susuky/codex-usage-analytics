@@ -1,5 +1,5 @@
-import type { OverviewData, SessionAggregate, SshSourceConfig, TokenBreakdown, TurnUsage, UsageSource } from "../types";
-import { localDateKey } from "./daily";
+import type { DailyUsage, OverviewData, SessionAggregate, SshSourceConfig, TokenBreakdown, TurnUsage, UsageSource } from "../types";
+import { emptyDailyUsage, localDateKey } from "./daily";
 import { isNonBillableModel } from "./pricing";
 
 const baseDate = new Date();
@@ -107,15 +107,16 @@ export function buildDemoSources(remoteSources: SshSourceConfig[] = []): UsageSo
 }
 
 export function buildDemoOverview(remoteSources: SshSourceConfig[] = []): OverviewData {
-  const map = new Map<string, { date: string; uncachedInput: number; cachedInput: number; cacheWriteInput: number; output: number; unclassified: number; estimateMicrousd: number; sessions: number }>();
+  const map = new Map<string, DailyUsage>();
   for (const session of demoSessions) {
     const date = localDateKey(new Date(session.startedAt));
-    const item = map.get(date) ?? { date, uncachedInput: 0, cachedInput: 0, cacheWriteInput: 0, output: 0, unclassified: 0, estimateMicrousd: 0, sessions: 0 };
+    const item = map.get(date) ?? emptyDailyUsage(date);
     item.cachedInput += session.tokens.cachedInputTokens;
     item.cacheWriteInput += session.tokens.cacheWriteInputTokens;
     item.uncachedInput += Math.max(0, session.tokens.inputTokens - session.tokens.cachedInputTokens - session.tokens.cacheWriteInputTokens);
     item.output += session.tokens.outputTokens;
     item.estimateMicrousd += session.estimateMicrousd ?? 0;
+    item.unpricedTokens += session.unpricedTokens;
     item.sessions += 1;
     map.set(date, item);
   }
@@ -177,8 +178,7 @@ export function buildDemoOverview(remoteSources: SshSourceConfig[] = []): Overvi
       serviceTiers: [{ name: "標準模式", count: 9 }, { name: "快速模式", count: 3 }],
       reasoningTokens: totals.reasoningOutputTokens,
       fastRequests: 3,
-      fastTokens: detailTurns.filter((turn) => turn.serviceTier === "priority").reduce((sum, turn) => sum + turn.tokens.totalTokens, 0),
-      weightedUsageRequests: 16.5
+      fastTokens: detailTurns.filter((turn) => turn.serviceTier === "priority").reduce((sum, turn) => sum + turn.tokens.totalTokens, 0)
     }
   };
 }

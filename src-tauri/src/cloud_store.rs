@@ -51,7 +51,7 @@ pub fn merge(connection: &mut Connection, user: &str, downloads: Vec<Download>) 
     let keys = local_keys(connection,user)?;
     let cloud_source = format!("cloud:{user}");
     let rules = db::load_settings(connection)?.pricing_rules;
-    db::ensure_source(connection,&UsageSource { id: cloud_source.clone(), name: "其他裝置".into(), kind: "cloud".into(), target: None, enabled: false, stale:false,last_scanned_at:None,last_error:None,session_count:0,latest_data_at:None })?;
+    db::ensure_source(connection,&UsageSource { id: cloud_source.clone(), name: "其他裝置".into(), kind: "cloud".into(), target: None, enabled: false, stale:false,last_scanned_at:None,last_error:None,last_notice:None,session_count:0,latest_data_at:None })?;
     for download in downloads {
         if download.session_key.len()!=64 || !download.session_key.chars().all(|c| c.is_ascii_hexdigit()) { return Err("雲端統計識別碼無效".into()); }
         let mut incoming = download.session;

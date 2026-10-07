@@ -129,7 +129,7 @@ function Convert-Session([string]$Path) {
             if ($line -match '"type"\s*:\s*"event_msg"' -and $line -notmatch '"type"\s*:\s*"(token_count|thread_settings_applied)"') { continue }
             $timestamp = ''
             if ($line -match '"timestamp"\s*:\s*"([^"]*)"') { $timestamp = $Matches[1] }
-            try { $value = $line | ConvertFrom-Json -ErrorAction Stop } catch { if ($line.Trim()) { $scanComplete = $false }; continue }
+            try { $value = $line | ConvertFrom-Json -ErrorAction Stop } catch { if ($line.Replace([string][char]0, '').Trim()) { $scanComplete = $false }; continue }
             if (-not $timestamp) { $timestamp = [string](Get-Value $value 'timestamp' '') }
             $kind = [string](Get-Value $value 'type' '')
             $payload = Get-Value $value 'payload' $null

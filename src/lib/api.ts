@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { buildDemoOverview, buildDemoSources, demoSessions } from "./mockData";
-import { localDateKey } from "./daily";
+import { emptyDailyUsage, localDateKey } from "./daily";
 import { applyNonBillablePricing, isNonBillableModel, nonBillablePricingRule } from "./pricing";
 import type { AppSettings, OverviewData, PricingRule, PricingStatus, PricingUpdateResult, ScanResult, SessionAggregate, SshSourceConfig, StoredSyncState, UsageFilter, UsageSource } from "../types";
 
@@ -14,6 +14,11 @@ export async function getOverview(filter: UsageFilter): Promise<OverviewData> {
 export async function listSessions(filter: UsageFilter): Promise<SessionAggregate[]> {
   if (!isTauri()) return (await getOverview(filter)).sessions;
   return invoke<SessionAggregate[]>("list_sessions", { filter });
+}
+
+export async function listSyncSessions(): Promise<SessionAggregate[]> {
+  if (!isTauri()) return demoSessions;
+  return invoke<SessionAggregate[]>("list_sync_sessions");
 }
 
 export async function getSessionDetail(sourceId: string, sessionId: string): Promise<SessionAggregate> {
@@ -169,12 +174,13 @@ function filterDemo(data: OverviewData, filter: UsageFilter): OverviewData {
   const modelMap = new Map<string, OverviewData["models"][number]>();
   for (const session of sessions) {
     const date = localDateKey(new Date(session.startedAt));
-    const day = dailyMap.get(date) ?? { date, uncachedInput: 0, cachedInput: 0, cacheWriteInput: 0, output: 0, unclassified: 0, estimateMicrousd: 0, sessions: 0 };
+    const day = dailyMap.get(date) ?? emptyDailyUsage(date);
     day.uncachedInput += Math.max(0, session.tokens.inputTokens - session.tokens.cachedInputTokens - session.tokens.cacheWriteInputTokens);
     day.cachedInput += session.tokens.cachedInputTokens;
     day.cacheWriteInput += session.tokens.cacheWriteInputTokens;
     day.output += session.tokens.outputTokens;
     day.estimateMicrousd += session.estimateMicrousd ?? 0;
+    day.unpricedTokens += session.unpricedTokens;
     day.sessions += 1;
     dailyMap.set(date, day);
 

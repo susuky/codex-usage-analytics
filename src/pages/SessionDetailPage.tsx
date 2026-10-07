@@ -32,7 +32,7 @@ export function SessionDetailPage() {
   if (!session) return <div className={styles.page}>{heading}<div className="page-loading" role="status">正在載入 Session 明細…</div></div>;
   const fastRequests = session.turns?.filter((turn) => turn.serviceTier === "priority").length ?? 0;
   const metricItems = [
-    { Icon: Database, label: "總 Tokens", value: formatInteger(session.tokens.totalTokens) },
+    { Icon: Database, label: "整段對話 Tokens", value: formatInteger(session.tokens.totalTokens) },
     { Icon: Download, label: "Input", value: formatInteger(session.tokens.inputTokens) },
     { Icon: Gauge, label: "Cached input", value: formatInteger(session.tokens.cachedInputTokens), hint: `快取率 ${cacheRate(session.tokens).toFixed(1)}%` },
     { Icon: Gauge, label: "Cache writes", value: formatInteger(session.tokens.cacheWriteInputTokens) },
@@ -49,6 +49,7 @@ export function SessionDetailPage() {
   return <div className={`${styles.page} detail-page`}>
     {heading}
     <div className={styles.content}>
+      <p className="footnote">這裡顯示整段對話的所有日期與模型；所選期間的用量請看 Sessions 列表。</p>
       <section className="metadata-strip"><div><span>模型</span><strong>{session.model}</strong></div><div><span>專案</span><strong>{session.project}</strong></div><div><span>開始時間</span><strong>{formatDateTime(session.startedAt)}</strong></div><div><span>最後活動</span><strong>{formatDateTime(session.endedAt)}</strong></div><div><span>資料來源</span><strong>{session.sourceName}</strong></div></section>
       <section className="detail-metrics">{metricItems.map(({ Icon, label, value, hint }) => <div key={label}><Icon size={20} /><span>{label}</span><strong>{value}</strong>{hint ? <small>{hint}</small> : null}</div>)}</section>
       <section className={`${styles.tablePanel} detail-chart-panel`}><h2 className={styles.tableTitle}>Token 累積曲線</h2><div className="detail-chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={chart} margin={{ top: 8, right: 20, left: 0, bottom: 0 }}><defs><linearGradient id="mintArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#65dfbf" stopOpacity=".35" /><stop offset="1" stopColor="#65dfbf" stopOpacity="0" /></linearGradient></defs><CartesianGrid stroke="#2c353c" strokeDasharray="2 3" /><XAxis dataKey="turn" tick={{ fill: "#849094", fontSize: 11 }} tickLine={false} /><YAxis tickFormatter={formatTokens} tick={{ fill: "#849094", fontSize: 11 }} tickLine={false} axisLine={false} /><Tooltip contentStyle={{ background: "#10171c", border: "1px solid #334047", borderRadius: 8 }} /><Area type="monotone" dataKey="total" name="總 Tokens" stroke="#65dfbf" fill="url(#mintArea)" strokeWidth={2} /><Area type="monotone" dataKey="input" name="Input" stroke="#4291f5" fill="none" strokeWidth={1.5} /><Area type="monotone" dataKey="output" name="Output" stroke="#8658dd" fill="none" strokeWidth={1.5} /><Area type="monotone" dataKey="reasoning" name="Reasoning" stroke="#f1bd3d" fill="none" strokeWidth={1.4} /></AreaChart></ResponsiveContainer></div></section>

@@ -2,7 +2,7 @@ use std::path::Path;
 use chrono::{Duration, Local, NaiveDate, SecondsFormat, TimeZone, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashMap;
-use crate::{models::{default_pricing_rules, ActivityOverview, AppSettings, NamedCount, PeriodTurnUsage, PricingRule, SessionActivity, SessionAggregate, SshSourceConfig, TokenBreakdown, TurnUsage, UsageFilter, UsageSource}, pricing::{chatgpt_usage_multiplier, estimate_with_rules_for_tier, is_fast_tier}};
+use crate::{models::{default_pricing_rules, ActivityOverview, AppSettings, NamedCount, PeriodTurnUsage, PricingRule, SessionActivity, SessionAggregate, SshSourceConfig, TokenBreakdown, TurnUsage, UsageFilter, UsageSource}, pricing::{estimate_with_rules_for_tier, is_fast_tier}};
 
 const MODEL_ATTRIBUTION_REVISION_KEY: &str = "data_revision:model-attribution-v2";
 const PRICING_REVISION_KEY: &str = "data_revision:official-pricing-v2";
@@ -50,7 +50,7 @@ pub fn open(path: &Path) -> Result<Connection, String> {
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS sources (
             id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, target TEXT, enabled INTEGER NOT NULL DEFAULT 1,
-            stale INTEGER NOT NULL DEFAULT 0, last_scanned_at TEXT, last_error TEXT
+            stale INTEGER NOT NULL DEFAULT 0, last_scanned_at TEXT, last_error TEXT, last_notice TEXT
         );
         CREATE TABLE IF NOT EXISTS sessions (
             source_id TEXT NOT NULL, session_id TEXT NOT NULL, source_name TEXT NOT NULL, source_kind TEXT NOT NULL,
@@ -81,6 +81,15 @@ pub fn open(path: &Path) -> Result<Connection, String> {
         CREATE TABLE IF NOT EXISTS file_checkpoints (file_key TEXT PRIMARY KEY, size INTEGER NOT NULL, modified TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
     ).map_err(|error| error.to_string())?;
+    let has_source_notice = {
+        let mut statement = connection.prepare("PRAGMA table_info(sources)").map_err(|error| error.to_string())?;
+        let columns = statement.query_map([], |row| row.get::<_, String>(1)).map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
+        columns.iter().any(|name| name == "last_notice")
+    };
+    if !has_source_notice {
+        connection.execute("ALTER TABLE sources ADD COLUMN last_notice TEXT", []).map_err(|error| error.to_string())?;
+    }
     let has_activity_tokens = {
         let mut statement = connection.prepare("PRAGMA table_info(sessions)").map_err(|error| error.to_string())?;
         let columns = statement.query_map([], |row| row.get::<_, String>(1)).map_err(|error| error.to_string())?
@@ -237,9 +246,9 @@ pub fn ensure_source(connection: &Connection, source: &UsageSource) -> Result<()
 
 pub fn upsert_source(connection: &Connection, source: &UsageSource) -> Result<(), String> {
     connection.execute(
-        "INSERT INTO sources(id,name,kind,target,enabled,stale,last_scanned_at,last_error) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
-         ON CONFLICT(id) DO UPDATE SET name=excluded.name,kind=excluded.kind,target=excluded.target,enabled=excluded.enabled,stale=excluded.stale,last_scanned_at=excluded.last_scanned_at,last_error=excluded.last_error",
-        params![source.id, source.name, source.kind, source.target, source.enabled as i64, source.stale as i64, source.last_scanned_at, source.last_error]
+        "INSERT INTO sources(id,name,kind,target,enabled,stale,last_scanned_at,last_error,last_notice) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
+         ON CONFLICT(id) DO UPDATE SET name=excluded.name,kind=excluded.kind,target=excluded.target,enabled=excluded.enabled,stale=excluded.stale,last_scanned_at=excluded.last_scanned_at,last_error=excluded.last_error,last_notice=excluded.last_notice",
+        params![source.id, source.name, source.kind, source.target, source.enabled as i64, source.stale as i64, source.last_scanned_at, source.last_error, source.last_notice]
     ).map_err(|error| error.to_string())?;
     Ok(())
 }
@@ -249,6 +258,8 @@ pub fn disable_ssh_sources(connection: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+// Returns the number of sessions that retain saved history. Scanners report
+// this separately from files they could not read or parse.
 pub fn save_sessions(connection: &mut Connection, sessions: &[SessionAggregate]) -> Result<usize, String> {
     save_sessions_with_activity(connection, sessions, true)
 }
@@ -367,7 +378,8 @@ fn retained_segments(old: &[(String, i64)], incoming: &[TurnUsage]) -> Option<(u
         return Some((prefix_len, 0, false));
     }
     // Earlier conflicting observations must not block independently recorded newer
-    // requests. Keep every saved turn, append only the strictly newer suffix, and warn.
+    // requests. Keep every saved turn, append only the strictly newer suffix,
+    // and report that historical statistics were retained.
     let incoming_start = incoming_dates.iter().take_while(|date| *date <= last_saved).count();
     let first_new = incoming.get(incoming_start)?;
     classified(first_new).then_some((old.len(), incoming_start, true))
@@ -649,11 +661,25 @@ fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionAggregat
 
 pub fn list_sessions(connection: &Connection, filter: &UsageFilter) -> Result<Vec<SessionAggregate>, String> {
     let (since, until) = period_bounds(filter);
+    let mut statement = connection.prepare("SELECT s.source_id,s.session_id,s.source_name,s.source_kind,s.project,
+        CASE WHEN COUNT(DISTINCT t.model)=1 THEN MIN(t.model) ELSE '多個模型' END,
+        MIN(t.timestamp),MAX(t.timestamp),s.origin,
+        SUM(t.input_tokens),SUM(t.cached_input_tokens),SUM(t.cache_write_input_tokens),SUM(t.output_tokens),SUM(t.reasoning_output_tokens),SUM(t.total_tokens),SUM(t.total_tokens),SUM(t.estimate_microusd),COUNT(*),s.rate_used_percent,s.rate_window_minutes,
+        SUM(CASE WHEN t.estimate_microusd IS NULL THEN 1 ELSE 0 END),
+        SUM(CASE WHEN t.estimate_microusd IS NULL THEN t.total_tokens ELSE 0 END)
+        FROM turns t JOIN sessions s ON s.source_id=t.source_id AND s.session_id=t.session_id
+        WHERE t.timestamp >= ?1 AND (?5 IS NULL OR t.timestamp < ?5) AND (?2 IS NULL OR t.source_id=?2) AND (?3 IS NULL OR t.model=?3) AND (?4 IS NULL OR s.project=?4)
+        GROUP BY t.source_id,t.session_id ORDER BY MAX(t.timestamp) DESC").map_err(|error| error.to_string())?;
+    let rows = statement.query_map(params![since, filter.source_id, filter.model, filter.project, until], session_from_row).map_err(|error| error.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
+}
+
+pub fn list_sync_sessions(connection: &Connection) -> Result<Vec<SessionAggregate>, String> {
     let mut statement = connection.prepare("SELECT source_id,session_id,source_name,source_kind,project,model,started_at,ended_at,origin,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,activity_tokens,estimate_microusd,token_event_count,rate_used_percent,rate_window_minutes,
         CASE WHEN estimate_microusd IS NULL AND total_tokens>0 AND NOT EXISTS (SELECT 1 FROM turns missing WHERE missing.source_id=s.source_id AND missing.session_id=s.session_id) THEN 1 ELSE (SELECT COUNT(*) FROM turns missing WHERE missing.source_id=s.source_id AND missing.session_id=s.session_id AND missing.estimate_microusd IS NULL) END,
         CASE WHEN estimate_microusd IS NULL AND total_tokens>0 AND NOT EXISTS (SELECT 1 FROM turns missing WHERE missing.source_id=s.source_id AND missing.session_id=s.session_id) THEN total_tokens ELSE COALESCE((SELECT SUM(missing.total_tokens) FROM turns missing WHERE missing.source_id=s.source_id AND missing.session_id=s.session_id AND missing.estimate_microusd IS NULL),0) END
-        FROM sessions s WHERE ended_at >= ?1 AND (?5 IS NULL OR started_at < ?5) AND (?2 IS NULL OR s.source_id=?2) AND (?4 IS NULL OR s.project=?4) AND (?3 IS NULL OR EXISTS (SELECT 1 FROM turns t WHERE t.source_id=s.source_id AND t.session_id=s.session_id AND t.timestamp >= ?1 AND (?5 IS NULL OR t.timestamp < ?5) AND t.model=?3)) ORDER BY ended_at DESC").map_err(|error| error.to_string())?;
-    let rows = statement.query_map(params![since, filter.source_id, filter.model, filter.project, until], session_from_row).map_err(|error| error.to_string())?;
+        FROM sessions s ORDER BY ended_at DESC").map_err(|error| error.to_string())?;
+    let rows = statement.query_map([], session_from_row).map_err(|error| error.to_string())?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
 }
 
@@ -693,8 +719,8 @@ pub fn get_session(connection: &Connection, source_id: &str, session_id: &str) -
 }
 
 pub fn list_sources(connection: &Connection) -> Result<Vec<UsageSource>, String> {
-    let mut statement = connection.prepare("SELECT s.id,s.name,s.kind,s.target,s.enabled,s.stale,s.last_scanned_at,s.last_error,(SELECT COUNT(*) FROM sessions x WHERE x.source_id=s.id),(SELECT MAX(x.ended_at) FROM sessions x WHERE x.source_id=s.id) FROM sources s ORDER BY s.kind,s.name").map_err(|error| error.to_string())?;
-    let rows = statement.query_map([], |row| Ok(UsageSource { id: row.get(0)?, name: row.get(1)?, kind: row.get(2)?, target: row.get(3)?, enabled: row.get::<_,i64>(4)? != 0, stale: row.get::<_,i64>(5)? != 0, last_scanned_at: row.get(6)?, last_error: row.get(7)?, session_count: row.get(8)?, latest_data_at: row.get(9)? })).map_err(|error| error.to_string())?;
+    let mut statement = connection.prepare("SELECT s.id,s.name,s.kind,s.target,s.enabled,s.stale,s.last_scanned_at,s.last_error,(SELECT COUNT(*) FROM sessions x WHERE x.source_id=s.id),(SELECT MAX(x.ended_at) FROM sessions x WHERE x.source_id=s.id),s.last_notice FROM sources s ORDER BY s.kind,s.name").map_err(|error| error.to_string())?;
+    let rows = statement.query_map([], |row| Ok(UsageSource { id: row.get(0)?, name: row.get(1)?, kind: row.get(2)?, target: row.get(3)?, enabled: row.get::<_,i64>(4)? != 0, stale: row.get::<_,i64>(5)? != 0, last_scanned_at: row.get(6)?, last_error: row.get(7)?, session_count: row.get(8)?, latest_data_at: row.get(9)?, last_notice: row.get(10)? })).map_err(|error| error.to_string())?;
     let sources = rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
     Ok(sources)
 }
@@ -733,16 +759,15 @@ pub fn get_activity(connection: &Connection, filter: &UsageFilter) -> Result<Act
         params![since, filter.source_id, filter.model, filter.project, until], |row| row.get(0)
     ).map_err(|error| error.to_string())?;
     let mut tier_statement = connection.prepare(
-        "SELECT t.service_tier,t.model,COUNT(*),COALESCE(SUM(t.total_tokens),0) FROM turns t JOIN sessions s ON s.source_id=t.source_id AND s.session_id=t.session_id WHERE t.timestamp >= ?1 AND (?5 IS NULL OR t.timestamp < ?5) AND (?2 IS NULL OR t.source_id=?2) AND (?3 IS NULL OR t.model=?3) AND (?4 IS NULL OR s.project=?4) GROUP BY t.service_tier,t.model"
+        "SELECT t.service_tier,COUNT(*),COALESCE(SUM(t.total_tokens),0) FROM turns t JOIN sessions s ON s.source_id=t.source_id AND s.session_id=t.session_id WHERE t.timestamp >= ?1 AND (?5 IS NULL OR t.timestamp < ?5) AND (?2 IS NULL OR t.source_id=?2) AND (?3 IS NULL OR t.model=?3) AND (?4 IS NULL OR s.project=?4) GROUP BY t.service_tier"
     ).map_err(|error| error.to_string())?;
-    let tier_rows = tier_statement.query_map(params![since, filter.source_id, filter.model, filter.project, until], |row| Ok((row.get::<_,String>(0)?, row.get::<_,String>(1)?, row.get::<_,i64>(2)?, row.get::<_,i64>(3)?))).map_err(|error| error.to_string())?;
+    let tier_rows = tier_statement.query_map(params![since, filter.source_id, filter.model, filter.project, until], |row| Ok((row.get::<_,String>(0)?, row.get::<_,i64>(1)?, row.get::<_,i64>(2)?))).map_err(|error| error.to_string())?;
     let mut tier_counts: HashMap<String, i64> = HashMap::new();
     for row in tier_rows {
-        let (tier, model, count, tokens) = row.map_err(|error| error.to_string())?;
+        let (tier, count, tokens) = row.map_err(|error| error.to_string())?;
         let fast = is_fast_tier(&tier);
         *tier_counts.entry(if fast { "快速模式".into() } else { "標準模式".into() }).or_default() += count;
         if fast { activity.fast_requests += count; activity.fast_tokens += tokens; }
-        activity.weighted_usage_requests += count as f64 * chatgpt_usage_multiplier(&model, &tier);
     }
     activity.service_tiers = tier_counts.into_iter().map(|(name, count)| NamedCount { name, count }).collect();
     activity.service_tiers.sort_by(|left, right| right.count.cmp(&left.count).then_with(|| left.name.cmp(&right.name)));

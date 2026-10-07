@@ -49,7 +49,6 @@ export interface ActivityOverview extends SessionActivity {
   reasoningTokens: number;
   fastRequests: number;
   fastTokens: number;
-  weightedUsageRequests: number;
 }
 
 export interface UsageSource {
@@ -61,6 +60,7 @@ export interface UsageSource {
   stale: boolean;
   lastScannedAt: string | null;
   lastError: string | null;
+  lastNotice?: string | null;
   sessionCount: number;
   latestDataAt: string | null;
 }
@@ -73,6 +73,7 @@ export interface DailyUsage {
   output: number;
   unclassified: number;
   estimateMicrousd: number;
+  unpricedTokens: number;
   sessions: number;
 }
 

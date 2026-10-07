@@ -5,6 +5,7 @@ import { ModelDistribution } from "./ModelDistribution";
 import { getOverview } from "../lib/api";
 import { useUsageData } from "../lib/data";
 import { buildDemoOverview } from "../lib/mockData";
+import { emptyDailyUsage } from "../lib/daily";
 import type { OverviewData } from "../types";
 
 vi.mock("../lib/api", () => ({ getOverview: vi.fn() }));
@@ -18,9 +19,9 @@ const dates = ["2026-10-01", "2026-10-02"];
 function Panel({ date }: { date: string }) {
   return <MemoryRouter><ModelDistribution date={date} dates={dates} onDateChange={vi.fn()} /></MemoryRouter>;
 }
-function dayData(model: string, total: number): OverviewData {
+function dayData(model: string, total: number, date = dates[0], estimate = 1230000): OverviewData {
   const tokens = { inputTokens: total, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: total };
-  return { ...overview, totals: tokens, models: total ? [{ ...overview.models[0], model, tokens }] : [] };
+  return { ...overview, totals: tokens, daily: [{ ...emptyDailyUsage(date), uncachedInput: total, estimateMicrousd: total ? estimate : 0 }], models: total ? [{ ...overview.models[0], model, tokens }] : [] };
 }
 beforeEach(() => {
   vi.mocked(useUsageData).mockReturnValue(context);
@@ -62,11 +63,13 @@ it("keeps the latest selected day when responses arrive out of order", async () 
   expect(screen.getByText("正在載入當日模型用量…")).toBeVisible();
   expect(getOverview).toHaveBeenLastCalledWith({ ...filter, startDate: dates[0], endDate: dates[0] });
   view.rerender(<Panel date={dates[1]} />);
-  await act(async () => pending[1](dayData("day-two-model", 250)));
+  await act(async () => pending[1](dayData("day-two-model", 250, dates[1], 2500000)));
   expect(screen.getAllByText("250 Tokens")[0]).toBeVisible();
+  expect(screen.getByText("US$2.50")).toBeVisible();
   await act(async () => pending[0](dayData("stale-model", 100)));
   expect(screen.getByText("day-two-model")).toBeVisible();
   expect(screen.queryByText("stale-model")).not.toBeInTheDocument();
+  expect(screen.queryByText("US$1.23")).not.toBeInTheDocument();
   expect(setFilter).not.toHaveBeenCalled();
   view.rerender(<Panel date="" />);
   expect(screen.queryByText("day-two-model")).not.toBeInTheDocument();
@@ -81,6 +84,7 @@ it("shows a recoverable error and a truthful empty day", async () => {
   fireEvent.click(screen.getByRole("button", { name: "重試" }));
   await screen.findByText("這一天沒有模型用量");
   expect(screen.getByText("0 Tokens")).toBeVisible();
+  expect(screen.getByText("US$0.00")).toBeVisible();
   expect(getOverview).toHaveBeenCalledTimes(2);
 });
 

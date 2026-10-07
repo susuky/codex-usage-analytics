@@ -74,7 +74,10 @@ test("activity page reports skills plugins and reasoning effort", async ({ page 
   await expect(page.getByText("medium", { exact: true })).toBeVisible();
   await expect(page.getByText("Reasoning tokens", { exact: true })).toBeVisible();
   await expect(page.getByText("快速模式請求", { exact: true })).toBeVisible();
-  await expect(page.getByText(/1\.5 倍指最高速度提升/)).toBeVisible();
+  const requests = page.locator("section").filter({ has: page.getByRole("heading", { name: "模型請求次數", exact: true }) });
+  await expect(requests.locator("strong")).toHaveText("12 次");
+  await expect(requests).toContainText("標準與快速模式每次都算 1 次");
+  await expect(page.getByText("快速模式額度", { exact: true })).toHaveCount(0);
 });
 
 test("fast mode is tracked per turn and uses an editable Priority multiplier", async ({ page }) => {

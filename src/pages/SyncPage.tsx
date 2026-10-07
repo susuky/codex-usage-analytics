@@ -24,9 +24,9 @@ export default function SyncPage() {
       return <article key={source.id}>
         <div className="source-icon">{source.kind === "local" ? <Laptop size={21} /> : source.kind === "cloud" ? <Cloud size={21} /> : <Server size={21} />}</div>
         <div className="source-identity"><strong>{source.name}</strong><span>{source.kind === "ssh" ? source.target : source.kind === "cloud" ? "雲端統計" : "本機 Codex"}</span></div>
-        <div className="source-meta"><strong>{source.sessionCount.toLocaleString()} Sessions</strong><span>{source.lastScannedAt ? `上次成功掃描於 ${formatDateTime(source.lastScannedAt)}` : "尚無完整掃描紀錄"}</span><span>{source.latestDataAt ? `資料最新至 ${formatDateTime(source.latestDataAt)}` : "尚無 Token 資料"}</span></div>
+        <div className="source-meta"><strong>{source.sessionCount.toLocaleString()} Sessions</strong><span>{source.lastScannedAt ? `上次成功掃描於 ${formatDateTime(source.lastScannedAt)}` : "尚無完整掃描紀錄"}</span><span>{source.latestDataAt ? `資料最新至 ${formatDateTime(source.latestDataAt)}` : "尚無 Token 資料"}</span>{source.enabled && source.lastNotice ? <span>{source.lastNotice}</span> : null}</div>
         <span className={`source-badge source-badge-${state}`}><StateIcon size={15} />{state === "disabled" ? "已停用" : state === "error" ? "需要處理" : state === "pending" ? "待更新" : "正常"}</span>
-        {source.enabled && source.lastError ? <details className="source-issue"><summary>查看問題詳情</summary><p>{source.lastError}</p><span>既有統計已保留。可重新掃描，或到設定檢查連線。</span></details> : null}
+        {source.enabled && source.lastError ? <details className="source-issue"><summary>查看問題詳情</summary><p>{source.lastError}</p><span>可重新掃描以更新紀錄；若無法連線，請到設定檢查來源。</span></details> : null}
       </article>;
     })}</section>
     {scanning ? <p className="scan-progress" role="status">正在完整掃描本機與遠端來源，完成後會自動更新。</p> : null}
