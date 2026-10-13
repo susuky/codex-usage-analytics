@@ -1,8 +1,9 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     io::{BufRead, BufReader, Read},
     process::{Command, Output},
 };
+use sha2::{Digest, Sha256};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -273,8 +274,24 @@ where F: FnMut(SessionAggregate) -> Result<usize, String> + Send,
 {
     validate_codex_home(codex_home)?;
     let since = modified_after.unwrap_or_default();
-    let (remote_command, script) = match platform {
+    // Full Windows histories are expensive in PowerShell. Reuse the same portable
+    // parser when Python is already installed, retaining PowerShell otherwise.
+    let python = match platform {
+        RemotePlatform::Posix => Some("python3 -"),
         RemotePlatform::Windows => {
+            run_remote(target, "python -c \"import sys;print('__CODEX_PYTHON_OK__' if sys.version_info >= (3, 8) else '')\"")
+                .is_ok_and(|probe| probe.status.success() && probe.stdout.trim_ascii() == b"__CODEX_PYTHON_OK__")
+                .then_some("python -X utf8 -")
+        }
+    };
+    let (remote_command, script) = if let Some(command) = python {
+        (command.to_string(), format!(
+            "SINCE_ISO = {}\nCODEX_HOME = {}\n{}",
+            serde_json::to_string(since).map_err(|error| error.to_string())?,
+            serde_json::to_string(codex_home.trim()).map_err(|error| error.to_string())?,
+            POSIX_SCAN_SCRIPT
+        ))
+    } else {
             let script = format!(
                 "$SinceIso = '{}'\n$CodexHome = '{}'\n{}",
                 since.replace('\'', "''"),
@@ -282,16 +299,6 @@ where F: FnMut(SessionAggregate) -> Result<usize, String> + Send,
                 WINDOWS_SCAN_SCRIPT
             );
             (windows_script_command(script.len()), script)
-        },
-        RemotePlatform::Posix => (
-            "python3 -".to_string(),
-            format!(
-                "SINCE_ISO = {}\nCODEX_HOME = {}\n{}",
-                serde_json::to_string(since).map_err(|error| error.to_string())?,
-                serde_json::to_string(codex_home.trim()).map_err(|error| error.to_string())?,
-                POSIX_SCAN_SCRIPT
-            ),
-        ),
     };
     let output = bounded_stream(base_command(target)?.arg(remote_command), script.into_bytes(), std::time::Duration::from_secs(600), |stdout| {
         consume_aggregates(BufReader::new(stdout), source_id, source_name, on_session)
@@ -306,6 +313,8 @@ where F: FnMut(SessionAggregate) -> Result<usize, String> + Send,
 fn valid_session(session: &SessionAggregate) -> bool {
     let Some(turns) = &session.turns else { return false; };
     if session.session_id.is_empty() || session.token_event_count != turns.len() as i64 { return false; }
+    if session.import_identity.as_ref().is_some_and(|identity| identity.excluded_turns.iter().any(|turn|
+        turn.total_tokens < 0 || chrono::DateTime::parse_from_rfc3339(&turn.timestamp).is_err())) { return false; }
     fn values(t: &TokenBreakdown) -> [i64; 6] {
         [t.input_tokens, t.cached_input_tokens, t.cache_write_input_tokens, t.output_tokens, t.reasoning_output_tokens, t.total_tokens]
     }
@@ -326,7 +335,8 @@ fn valid_session(session: &SessionAggregate) -> bool {
 fn consume_aggregates<R: BufRead, F: FnMut(SessionAggregate) -> Result<usize, String>>(
     mut reader: R, source_id: &str, source_name: &str, mut on_session: F,
 ) -> Result<RemoteScanSummary, String> {
-    let mut sessions: HashMap<String, (i64, i64)> = HashMap::new();
+    let mut sessions = HashSet::new();
+    let mut snapshots = HashSet::new();
     let mut retained = HashSet::new();
     let mut invalid_lines = 0;
     let mut summary = None;
@@ -357,13 +367,13 @@ fn consume_aggregates<R: BufRead, F: FnMut(SessionAggregate) -> Result<usize, St
             }
         };
         if !valid_session(&parsed) { invalid_lines += 1; continue; }
+        if !snapshots.insert(Sha256::digest(bytes)) { continue; }
         parsed.source_id = source_id.into();
         parsed.source_name = source_name.into();
         parsed.source_kind = "ssh".into();
         let key = parsed.session_id.clone();
-        let revision = (parsed.token_event_count, parsed.tokens.total_tokens);
-        if sessions.get(&key).is_some_and(|current| *current >= revision) { continue; }
-        sessions.insert(key.clone(), revision);
+        // Counts cannot distinguish an archived copy from a disjoint segment.
+        sessions.insert(key.clone());
         if on_session(parsed)? > 0 {
             retained.insert(key);
         } else {

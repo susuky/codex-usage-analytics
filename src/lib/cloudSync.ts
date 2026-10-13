@@ -6,7 +6,7 @@ export async function hashKey(userId: string, value: string) {
 }
 
 export const localKey = (session: SessionAggregate) => `${session.sourceId}:${session.sessionId}`;
-export const fingerprint = (session: SessionAggregate) => JSON.stringify([5, session.endedAt, session.model, session.tokens, session.tokenEventCount, session.estimateMicrousd, session.unpricedTokens]);
+export const fingerprint = (session: SessionAggregate) => JSON.stringify([6, session.aggregationVersion ?? 5, session.syncFingerprint ?? "", session.endedAt, session.model, session.tokens, session.tokenEventCount, session.estimateMicrousd, session.unpricedTokens]);
 
 export function queueSnapshots(state: StoredSyncState, sessions: SessionAggregate[]): StoredSyncState {
   const pending = { ...state.pending };
@@ -27,6 +27,8 @@ export interface SessionRow extends TokenRow {
   model: string; origin: string; token_event_count: number; estimate_microusd: number | null;
   aggregation_version: number; observed_at: string;
   sync_revision?: string;
+  excluded_usage?: { timestamp: string; total_tokens: number }[];
+  base_revision?: string | null;
 }
 export interface TurnRow extends TokenRow {
   turn_ordinal: number; occurred_at: string; model: string; service_tier: "default" | "priority";
@@ -49,7 +51,7 @@ const toRow = (tokens: TokenBreakdown): TokenRow => ({
 });
 const fromRow = (row: TokenRow): TokenBreakdown => ({ inputTokens: row.input_tokens, cachedInputTokens: row.cached_input_tokens, cacheWriteInputTokens: row.cache_write_input_tokens, outputTokens: row.output_tokens, reasoningOutputTokens: row.reasoning_output_tokens, totalTokens: row.total_tokens });
 
-export async function uploadPayload(user: string, item: SessionAggregate): Promise<{ p_session: SessionRow; p_turns: TurnRow[] }> {
+export async function uploadPayload(user: string, item: SessionAggregate, baseRevision: string | null = null): Promise<{ p_session: SessionRow; p_turns: TurnRow[] }> {
   const turns = item.turns;
   if (!turns || turns.length !== item.tokenEventCount || turns.reduce((n,t) => n+t.tokens.totalTokens,0) !== item.tokens.totalTokens) throw new Error("回合資料不完整，稍後將重新同步");
   return {
@@ -58,18 +60,21 @@ export async function uploadPayload(user: string, item: SessionAggregate): Promi
       source_key: await hashKey(user, `session-origin:${item.sessionId}`), session_key: await hashKey(user,item.sessionId),
       project_key: await hashKey(user,item.project), started_at:item.startedAt, ended_at:item.endedAt, model:item.model, origin:"Codex",
       ...toRow(item.tokens), estimate_microusd:item.estimateMicrousd, token_event_count:item.tokenEventCount,
-      aggregation_version:5, observed_at:item.endedAt,
+      aggregation_version:6, observed_at:item.endedAt, base_revision:baseRevision,
+      excluded_usage:(item.excludedUsage ?? []).map((usage) => ({ timestamp:usage.timestamp,total_tokens:usage.totalTokens })),
     },
     p_turns: turns.map((turn) => ({ turn_ordinal:turn.ordinal, occurred_at:turn.timestamp, model:turn.model, ...toRow(turn.tokens),
       service_tier:turn.serviceTier ?? "default", reasoning_effort:turn.reasoningEffort || "unknown", estimate_microusd:turn.estimateMicrousd })),
   };
 }
 
-export function downloadPayload(snapshot: CloudSnapshot): { sessionKey: string; session: SessionAggregate } {
+export function downloadPayload(snapshot: CloudSnapshot, preferLocal = false): { sessionKey: string; session: SessionAggregate; preferLocal: boolean } {
   const { session: row } = snapshot;
   const turns: TurnUsage[] = snapshot.turns.map((t) => ({ ordinal:t.turn_ordinal,timestamp:t.occurred_at,model:t.model,serviceTier:t.service_tier,reasoningEffort:t.reasoning_effort,
     tokens:fromRow(t),estimateMicrousd:t.estimate_microusd,cacheRate:t.input_tokens ? t.cached_input_tokens/t.input_tokens*100 : 0 }));
-  return { sessionKey:row.session_key, session:{
+  return { sessionKey:row.session_key, preferLocal, session:{
+    aggregationVersion:row.aggregation_version,
+    excludedUsage:(row.excluded_usage ?? []).map((usage) => ({ timestamp:usage.timestamp,totalTokens:usage.total_tokens })),
     sessionId:row.session_key,sourceId:"",sourceName:"其他裝置",sourceKind:"cloud",project:`專案 ${row.project_key.slice(0,8)}`,
     model:row.model,startedAt:row.started_at,endedAt:row.ended_at,origin:"Codex",tokens:fromRow(row),activityTokens:row.total_tokens,
     estimateMicrousd:row.estimate_microusd,unpricedTurnCount:turns.filter((t) => t.estimateMicrousd===null).length,

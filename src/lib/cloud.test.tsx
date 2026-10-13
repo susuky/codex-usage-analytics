@@ -7,11 +7,12 @@ import { fingerprint, localKey, remoteFingerprint, uploadPayload, type CloudSnap
 const mocks = vi.hoisted(() => ({
   createClient: vi.fn(), listSyncSessions: vi.fn(), getSettings: vi.fn(), getSyncState: vi.fn(),
   saveSyncState: vi.fn(), mergeCloudSessions: vi.fn(), rpc: vi.fn(), from: vi.fn(), reload: vi.fn(),
+  getSessionDetail: vi.fn(),
 }));
 vi.mock("@supabase/supabase-js", () => ({ createClient: mocks.createClient }));
 vi.mock("./data", () => ({ useUsageData: () => ({ reload: mocks.reload }) }));
 vi.mock("./api", () => ({
-  ...mocks, getSessionDetail: vi.fn(), saveSettings: vi.fn(), secureGet: vi.fn(),
+  ...mocks, saveSettings: vi.fn(), secureGet: vi.fn(),
   secureRemove: vi.fn(), secureSet: vi.fn(),
 }));
 
@@ -53,6 +54,7 @@ beforeEach(async () => {
   mocks.getSyncState.mockImplementation(async () => structuredClone(state));
   mocks.saveSyncState.mockImplementation(async (_user, next) => { state = structuredClone(next); });
   mocks.mergeCloudSessions.mockResolvedValue(undefined);
+  mocks.getSessionDetail.mockResolvedValue(local);
   mocks.rpc.mockImplementation((name) => ({ abortSignal: async () => ({
     data: name === "get_usage_session_v3" ? structuredClone(snapshot) : true, error: null,
   }) }));
@@ -124,4 +126,27 @@ it("acknowledges the fetched revision when the cloud changes after listing", asy
   expect(state.acknowledged[`remote:${snapshot.session.session_key}`]).toBe(remoteFingerprint(snapshot.session));
   await syncAgain();
   expect(downloads()).toHaveLength(1);
+});
+
+it("retains a rejected correction and retries with the newly downloaded revision", async () => {
+  const detail={...local,syncFingerprint:"corrected-turns"};
+  mocks.listSyncSessions.mockResolvedValue([detail]);
+  mocks.getSessionDetail.mockResolvedValue(detail);
+  snapshot.session.sync_revision="before-concurrent-write";
+  let reject=true;
+  mocks.rpc.mockImplementation((name) => ({abortSignal:async () => ({
+    data:name==="get_usage_session_v3" ? structuredClone(snapshot) : name==="sync_usage_session_v3" ? !reject : true,error:null,
+  })}));
+  render(<CloudProvider><Probe /></CloudProvider>);
+  await waitFor(() => expect(screen.getByText(/這筆修正尚未上傳/)).toBeVisible());
+  expect(state.pending[localKey(detail)]).toBe(fingerprint(detail));
+  expect(state.acknowledged[localKey(detail)]).toBe(fingerprint(local));
+  expect(state.lastSyncedAt).toBeNull();
+  snapshot.session.sync_revision="after-concurrent-write";reject=false;
+  await syncAgain();
+  const uploads=mocks.rpc.mock.calls.filter(([name]) => name==="sync_usage_session_v3");
+  expect(uploads).toHaveLength(2);
+  expect(uploads[1][1].p_session.base_revision).toBe("after-concurrent-write");
+  expect(state.pending).toEqual({});
+  expect(state.acknowledged[localKey(detail)]).toBe(fingerprint(detail));
 });

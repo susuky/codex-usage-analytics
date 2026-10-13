@@ -30,6 +30,8 @@ pub fn save(connection: &Connection, user: &str, state: &SyncState) -> Result<()
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct Download {
+    #[serde(default)]
+    pub prefer_local: bool,
     pub session_key: String,
     pub session: SessionAggregate,
 }
@@ -44,6 +46,29 @@ fn local_keys(connection: &Connection, user: &str) -> Result<HashMap<String,(Str
     let mut result = HashMap::new();
     for row in rows { let (source,session) = row.map_err(|e| e.to_string())?; result.insert(session_hash(user,&session),(source,session)); }
     Ok(result)
+}
+
+fn preserve_local_details(incoming: &mut SessionAggregate, original: &SessionAggregate, prefer_local: bool) -> Result<(),String> {
+    // Keep unsent raw corrections while importing the cloud's other turns
+    // and removal evidence. Legacy snapshots cannot revert newer parsing.
+    if original.aggregation_version > incoming.aggregation_version
+        || (prefer_local && original.aggregation_version >= incoming.aggregation_version) {
+        let stamp = |value: &str| chrono::DateTime::parse_from_rfc3339(value).map(|t|t.timestamp_micros()).map_err(|e|e.to_string());
+        let local = original.turns.as_deref().unwrap_or_default().iter()
+            .map(|turn| Ok(((stamp(&turn.timestamp)?,turn.tokens.total_tokens),turn)))
+            .collect::<Result<HashMap<_,_>,String>>()?;
+        incoming.tokens = Default::default();
+        for turn in incoming.turns.as_mut().unwrap() {
+            if let Some(saved) = local.get(&(stamp(&turn.timestamp)?,turn.tokens.total_tokens)) {
+                let ordinal=turn.ordinal;
+                *turn=(*saved).clone();
+                turn.ordinal=ordinal;
+            }
+            incoming.tokens.add_assign(&turn.tokens);
+        }
+        incoming.aggregation_version=original.aggregation_version;
+    }
+    Ok(())
 }
 
 pub fn merge(connection: &mut Connection, user: &str, downloads: Vec<Download>) -> Result<(),String> {
@@ -61,6 +86,7 @@ pub fn merge(connection: &mut Connection, user: &str, downloads: Vec<Download>) 
         }
         if let Some((source,session)) = keys.get(&download.session_key) {
             let original = db::get_session(connection,source,session)?;
+            preserve_local_details(&mut incoming, &original, download.prefer_local)?;
             incoming.source_id = original.source_id;
             incoming.source_name = original.source_name;
             incoming.source_kind = original.source_kind;
@@ -71,6 +97,12 @@ pub fn merge(connection: &mut Connection, user: &str, downloads: Vec<Download>) 
             incoming.source_name = "其他裝置".into();
             incoming.source_kind = "cloud".into();
             incoming.session_id = download.session_key;
+            let exists: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE source_id=?1 AND session_id=?2)",
+                params![incoming.source_id,incoming.session_id], |row| row.get(0)).map_err(|e|e.to_string())?;
+            if exists {
+                let original = db::get_session(connection,&incoming.source_id,&incoming.session_id)?;
+                preserve_local_details(&mut incoming,&original,false)?;
+            }
         }
         incoming.origin = "Codex".into();
         pricing::reprice_sessions(std::slice::from_mut(&mut incoming),&rules);
@@ -95,12 +127,14 @@ pub fn reconcile(connection: &mut Connection) -> Result<(),String> {
         let cloud = db::get_session(connection,&source,&id)?;
         let local = db::get_session(connection,local_source,local_id)?;
         let mut merged = cloud.clone();
+        preserve_local_details(&mut merged, &local, false)?;
         merged.source_id = local.source_id; merged.session_id = local.session_id;
         merged.source_name = local.source_name; merged.source_kind = local.source_kind; merged.project = local.project;
         db::save_cloud_sessions(connection,&[merged])?;
         let saved = db::get_session(connection,local_source,local_id)?;
         let mut existing = saved.turns.as_ref().unwrap().iter();
-        if !cloud.turns.as_ref().unwrap().iter().all(|t| existing.any(|old| db::same_timestamp(&old.timestamp,&t.timestamp) && old.tokens.total_tokens==t.tokens.total_tokens)) { continue; }
+        if !cloud.turns.as_ref().unwrap().iter().all(|t| saved.excluded_usage.iter().any(|removed| db::same_timestamp(&removed.timestamp,&t.timestamp) && removed.total_tokens==t.tokens.total_tokens)
+            || existing.any(|old| db::same_timestamp(&old.timestamp,&t.timestamp) && old.tokens.total_tokens==t.tokens.total_tokens)) { continue; }
         let tx = connection.transaction().map_err(|e| e.to_string())?;
         for table in ["turns","session_activity","sessions"] {
             tx.execute(&format!("DELETE FROM {table} WHERE source_id=?1 AND session_id=?2"),params![source,id]).map_err(|e| e.to_string())?;

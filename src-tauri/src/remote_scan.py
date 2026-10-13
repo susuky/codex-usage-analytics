@@ -94,6 +94,9 @@ def counts(values):
 
 def parse_file(path):
     session_id = ""
+    legacy_session_id = ""
+    history_start = None
+    excluded_turns = []
     origin = "Codex"
     started_at = ""
     ended_at = ""
@@ -126,8 +129,24 @@ def parse_file(path):
             timestamp = value.get("timestamp") or ""
             kind = value.get("type")
             payload = value.get("payload") or {}
+            ordinal = value.get("ordinal")
+            if history_start is not None and kind != "session_meta" and not isinstance(ordinal, int):
+                scan_complete = False
+            if history_start is not None and isinstance(ordinal, int) and ordinal < history_start and kind != "session_meta":
+                if payload.get("type") == "token_count":
+                    usage = (payload.get("info") or {}).get("last_token_usage") or {}
+                    if isinstance(usage.get("total_tokens"), int):
+                        excluded_turns.append({"timestamp": timestamp, "totalTokens": usage["total_tokens"]})
+                continue
             if kind == "session_meta":
-                session_id = payload.get("id") or payload.get("session_id") or ""
+                identity = payload.get("id") or payload.get("session_id") or ""
+                if not identity:
+                    continue
+                legacy_session_id = identity
+                if session_id:
+                    continue
+                session_id = identity
+                history_start = payload.get("subagent_history_start_ordinal")
                 started_at = payload.get("timestamp") or timestamp
                 ended_at = started_at
                 origin = payload.get("originator") or "Codex"
@@ -209,7 +228,10 @@ def parse_file(path):
     totals = {key: sum(turn["tokens"][key] for turn in turns) for key in totals}
     return {
         "scanComplete": scan_complete,
+        "aggregationVersion": 6,
         "sessionId": session_id,
+        "importIdentity": {"legacySessionId": legacy_session_id, "excludedTurns": excluded_turns}
+            if history_start is not None or legacy_session_id != session_id else None,
         "sourceId": "",
         "sourceName": "",
         "sourceKind": "ssh",
@@ -237,8 +259,43 @@ if SINCE_ISO:
     except ValueError:
         pass
 
-root = CODEX_HOME if "CODEX_HOME" in globals() and CODEX_HOME else os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
-if not any(os.path.isdir(os.path.join(root, folder)) for folder in ("sessions", "archived_sessions")):
+roots = []
+seen_roots = set()
+
+def add_root(path):
+    if not path:
+        return
+    path = os.path.expandvars(path.strip()).rstrip("/\\")
+    key = os.path.normcase(path)
+    if key not in seen_roots and any(os.path.isdir(os.path.join(path, folder)) for folder in ("sessions", "archived_sessions")):
+        seen_roots.add(key)
+        roots.append(path)
+
+if "CODEX_HOME" in globals() and CODEX_HOME:
+    add_root(CODEX_HOME)
+elif os.name == "nt":
+    add_root(os.environ.get("CODEX_HOME"))
+    add_root(os.path.expanduser("~/.codex"))
+    # Match PowerShell discovery without starting stopped WSL distributions.
+    for provider in (r"\\wsl.localhost", r"\\wsl$"):
+        try:
+            with os.scandir(provider) as entries:
+                distributions = [entry.path for entry in entries if entry.is_dir()]
+            for distribution in distributions:
+                try:
+                    with os.scandir(os.path.join(distribution, "home")) as homes:
+                        for home in homes:
+                            if home.is_dir():
+                                add_root(os.path.join(home.path, ".codex"))
+                except OSError:
+                    pass
+                add_root(os.path.join(distribution, "root", ".codex"))
+        except OSError:
+            pass
+else:
+    add_root(os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex"))
+
+if not roots:
     sys.stderr.write("CODEX_SESSIONS_NOT_FOUND")
     raise SystemExit(3)
 skipped_files = 0
@@ -246,8 +303,7 @@ def walk_error(_error):
     global skipped_files
     skipped_files += 1
 
-for folder in ("sessions", "archived_sessions"):
-    base = os.path.join(root, folder)
+for base in (os.path.join(root, folder) for root in roots for folder in ("sessions", "archived_sessions")):
     if not os.path.isdir(base):
         continue
     for current, _, files in os.walk(base, onerror=walk_error):

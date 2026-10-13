@@ -1,11 +1,31 @@
-use std::{collections::HashMap, fs::File, io::{BufReader, Read}, path::Path};
+use std::{collections::HashSet, fs::File, io::{BufReader, Read}, path::Path};
 use walkdir::WalkDir;
 use sha2::{Digest, Sha256};
 use rusqlite::{Connection, OptionalExtension, params};
-use crate::{models::{SessionAggregate, ScanBatch}, parser::parse_session};
+use crate::{models::ScanBatch, parser::parse_session};
 
 pub fn scan_local(codex_home: &Path, connection: &mut Connection, force_full: bool) -> Result<ScanBatch, String> {
-    let mut sessions: HashMap<String, SessionAggregate> = HashMap::new();
+    let repairing = crate::import_repair::pending(connection, "local")?;
+    let first = scan_local_once(codex_home, connection, force_full || repairing);
+    if first.as_ref().map_or(true, |batch| batch.skipped_files > 0) {
+        return first;
+    }
+    if let Some(revision) = crate::import_repair::revision(connection, "local")? {
+        // Keep the marker durable while scanning, including a process interruption.
+        let second = scan_local_once(codex_home, connection, true);
+        if second.as_ref().is_ok_and(|batch| batch.skipped_files == 0)
+            && crate::import_repair::revision(connection, "local")? == Some(revision) {
+            crate::import_repair::set_pending(connection, "local", false)?;
+        }
+        return second;
+    }
+    first
+}
+
+fn scan_local_once(codex_home: &Path, connection: &mut Connection, force_full: bool) -> Result<ScanBatch, String> {
+    let mut session_ids = HashSet::new();
+    let mut retained = HashSet::new();
+    let rules = crate::db::load_settings(connection)?.pricing_rules;
     let mut skipped_files = 0;
     let mut checkpoints = Vec::new();
     let roots = [codex_home.join("sessions"), codex_home.join("archived_sessions")];
@@ -24,14 +44,18 @@ pub fn scan_local(codex_home: &Path, connection: &mut Connection, force_full: bo
             let unchanged = entry.path().metadata().ok().is_some_and(|after| after.len() == metadata.len() && after.modified().ok() == metadata.modified().ok());
             if parsed.scan_complete && unchanged { checkpoints.push((file_key, metadata.len(), modified)); }
             else { skipped_files += 1; }
-            let should_replace = sessions.get(&parsed.session_id).map(|current| parsed.token_event_count >= current.token_event_count).unwrap_or(true);
-            if should_replace { sessions.insert(parsed.session_id.clone(), parsed); }
+            // Different files can be disjoint continuations of the same session.
+            // Persist each segment; the database merges observations by identity.
+            let mut parsed = parsed;
+            crate::pricing::reprice_sessions(std::slice::from_mut(&mut parsed), &rules);
+            if crate::db::save_sessions(connection, std::slice::from_ref(&parsed))? > 0 { retained.insert(parsed.session_id.clone()); }
+            // An incomplete child may be intentionally rejected before its first
+            // save; report the unreadable file without looking up a missing row.
+            if parsed.scan_complete || parsed.import_identity.is_none() { session_ids.insert(parsed.session_id); }
         }
     }
-    let mut sessions: Vec<_> = sessions.into_values().collect();
-    let rules = crate::db::load_settings(connection)?.pricing_rules;
-    crate::pricing::reprice_sessions(&mut sessions, &rules);
-    let retained_sessions = crate::db::save_sessions(connection, &sessions)?;
+    let sessions = session_ids.iter().map(|id| crate::db::get_session(connection, "local", id)).collect::<Result<Vec<_>,_>>()?;
+    let retained_sessions = retained.len();
     // Keeping previously imported history is a completed import decision. A
     // readable, unchanged compacted log need not be retried until it changes.
     // Checkpoints advance only after the corresponding aggregates are committed.

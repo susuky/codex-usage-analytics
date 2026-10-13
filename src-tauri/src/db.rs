@@ -2,6 +2,7 @@ use std::path::Path;
 use chrono::{Duration, Local, NaiveDate, SecondsFormat, TimeZone, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashMap;
+use sha2::{Digest, Sha256};
 use crate::{models::{default_pricing_rules, ActivityOverview, AppSettings, NamedCount, PeriodTurnUsage, PricingRule, SessionActivity, SessionAggregate, SshSourceConfig, TokenBreakdown, TurnUsage, UsageFilter, UsageSource}, pricing::{estimate_with_rules_for_tier, is_fast_tier}};
 
 const MODEL_ATTRIBUTION_REVISION_KEY: &str = "data_revision:model-attribution-v2";
@@ -235,6 +236,23 @@ pub fn open(path: &Path) -> Result<Connection, String> {
             INSERT INTO settings VALUES('data_revision:thread-settings-model-v1','1');
             COMMIT;").map_err(|e| e.to_string())?;
     }
+    crate::import_repair::initialize(&connection)?;
+    let has_fingerprint = connection.prepare("PRAGMA table_info(sessions)").map_err(|e| e.to_string())?
+        .query_map([], |row| row.get::<_,String>(1)).map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())?.iter().any(|name| name=="sync_fingerprint");
+    if !has_fingerprint {
+        connection.execute_batch("ALTER TABLE sessions ADD COLUMN sync_fingerprint TEXT NOT NULL DEFAULT '';
+            DELETE FROM file_checkpoints;
+            UPDATE sources SET last_scanned_at=NULL WHERE kind IN ('local','ssh');").map_err(|e| e.to_string())?;
+    }
+    let has_version = connection.prepare("PRAGMA table_info(sessions)").map_err(|e| e.to_string())?
+        .query_map([], |row| row.get::<_,String>(1)).map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())?.iter().any(|name| name=="aggregation_version");
+    if !has_version {
+        connection.execute_batch("ALTER TABLE sessions ADD COLUMN aggregation_version INTEGER NOT NULL DEFAULT 5;
+            DELETE FROM file_checkpoints;
+            UPDATE sources SET last_scanned_at=NULL WHERE kind IN ('local','ssh');").map_err(|e| e.to_string())?;
+    }
     Ok(connection)
 }
 
@@ -276,7 +294,12 @@ fn save_sessions_with_activity(connection: &mut Connection, sessions: &[SessionA
     let rules = load_settings(&tx)?.pricing_rules;
     let mut retained = 0;
     for session in sessions {
+        // Partial files cannot safely supply evidence for moving historical usage.
+        if replace_activity && session.import_identity.is_some() && !session.scan_complete { retained += 1; continue; }
+        crate::import_repair::apply_exclusions(&tx, session)?;
+        if replace_activity { crate::import_repair::exclude_inherited_turns(&tx, session)?; }
         let mut current = session.clone();
+        crate::import_repair::filter_reassigned_turns(&tx, &mut current)?;
         let mut retained_history = false;
         crate::pricing::reprice_sessions(std::slice::from_mut(&mut current), &rules);
         let Some(incoming_turns) = &current.turns else { retained += 1; continue };
@@ -285,25 +308,49 @@ fn save_sessions_with_activity(connection: &mut Connection, sessions: &[SessionA
             params![current.source_id, current.session_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional().map_err(|error| error.to_string())?;
-        // Preserve history when a resumed log contains only its newer suffix.
-        // Overlapping observations must still agree; gaps in the middle stay rejected.
+        // Preserve history across resumed or archived segments in any order.
+        // Conflicting observations and ambiguous cumulative deltas stay protected.
         if let Some((event_count, total_tokens, ended_at)) = existing {
             let mut query = tx.prepare("SELECT timestamp,total_tokens FROM turns WHERE source_id=?1 AND session_id=?2 ORDER BY ordinal").map_err(|e| e.to_string())?;
             let old = query.query_map(params![current.source_id,current.session_id], |row| Ok((row.get::<_,String>(0)?, row.get::<_,i64>(1)?))).map_err(|e| e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())?;
             let mut next = incoming_turns.iter();
             let includes_old = old.iter().all(|(timestamp,total)| next.any(|turn| same_timestamp(&turn.timestamp, timestamp) && turn.tokens.total_tokens == *total));
-            let segments = if current.scan_complete && !includes_old {
+            // Merge independent earlier/middle segments as well as newer suffixes.
+            // A timestamp can contain several distinct requests; keep each identity.
+            let incoming_by_time = incoming_turns.iter().map(|turn| chrono::DateTime::parse_from_rfc3339(&turn.timestamp).map(|time| (time, turn.tokens.total_tokens))).collect::<Result<std::collections::HashSet<_>,_>>();
+            let old_keys = old.iter().map(|(time,total)| chrono::DateTime::parse_from_rfc3339(time).map(|time| (time,*total))).collect::<Result<std::collections::HashSet<_>,_>>();
+            let merge_owned = current.scan_complete && !includes_old
+                && chrono::DateTime::parse_from_rfc3339(&current.ended_at).is_ok()
+                && incoming_by_time.as_ref().ok().zip(old_keys.as_ref().ok()).is_some_and(|(incoming,old)| {
+                    let Ok(started) = chrono::DateTime::parse_from_rfc3339(&current.started_at) else { return false };
+                    let overlaps: std::collections::HashSet<_> = incoming.intersection(old).map(|(time,_)| *time).collect();
+                    let old_times: std::collections::HashSet<_> = old.iter().map(|(time,_)| *time).collect();
+                    incoming.difference(old).next().is_some()
+                        && incoming.difference(old).all(|(time,_)| *time > started)
+                        && incoming.iter().all(|(time,_)| !old_times.contains(time) || overlaps.contains(time))
+                        && incoming_turns.iter().all(|turn| old.contains(&(chrono::DateTime::parse_from_rfc3339(&turn.timestamp).unwrap(),turn.tokens.total_tokens))
+                            || turn.tokens.total_tokens <= turn.tokens.input_tokens + turn.tokens.output_tokens)
+                });
+            let segments = if merge_owned { Some((old.len(), 0, false)) } else if current.scan_complete && !includes_old {
                 retained_segments(&old, incoming_turns)
             } else { None };
             if let Some((saved_count, incoming_start, conflicting_history)) = segments {
                 let previous = get_session(&tx, &current.source_id, &current.session_id)?;
                 let mut turns: Vec<_> = previous.turns.unwrap_or_default().into_iter().take(saved_count).chain(incoming_turns[incoming_start..].iter().cloned()).collect();
+                if merge_owned {
+                    let incoming = incoming_by_time.as_ref().unwrap();
+                    // Prefer the raw request's model/tier when the saved observation matches.
+                    let mut index = 0;
+                    turns.retain(|turn| { let keep = index >= saved_count || !incoming.contains(&(chrono::DateTime::parse_from_rfc3339(&turn.timestamp).unwrap(),turn.tokens.total_tokens)); index += 1; keep });
+                    turns.sort_by_key(|turn| chrono::DateTime::parse_from_rfc3339(&turn.timestamp).unwrap());
+                }
                 current.tokens = TokenBreakdown::default();
                 for (index, turn) in turns.iter_mut().enumerate() {
                     turn.ordinal = index as i64 + 1;
                     current.tokens.add_assign(&turn.tokens);
                 }
                 current.started_at = previous.started_at;
+                if let Some(last) = turns.last() { current.ended_at = last.timestamp.clone(); current.model = last.model.clone(); }
                 current.token_event_count = turns.len() as i64;
                 current.activity_tokens = current.tokens.total_tokens;
                 current.turns = Some(turns);
@@ -329,36 +376,44 @@ fn save_sessions_with_activity(connection: &mut Connection, sessions: &[SessionA
                 continue;
             } else if !includes_old { retained += 1; continue; }
         }
-        let session = &current;
-        let t = &session.tokens;
-        tx.execute(
-            "INSERT INTO sessions(source_id,session_id,source_name,source_kind,project,model,started_at,ended_at,origin,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,activity_tokens,estimate_microusd,token_event_count,rate_used_percent,rate_window_minutes) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
-             ON CONFLICT(source_id,session_id) DO UPDATE SET source_name=excluded.source_name,source_kind=excluded.source_kind,project=excluded.project,model=excluded.model,started_at=excluded.started_at,ended_at=excluded.ended_at,origin=excluded.origin,input_tokens=excluded.input_tokens,cached_input_tokens=excluded.cached_input_tokens,cache_write_input_tokens=excluded.cache_write_input_tokens,output_tokens=excluded.output_tokens,reasoning_output_tokens=excluded.reasoning_output_tokens,total_tokens=excluded.total_tokens,activity_tokens=excluded.activity_tokens,estimate_microusd=excluded.estimate_microusd,token_event_count=excluded.token_event_count,rate_used_percent=excluded.rate_used_percent,rate_window_minutes=excluded.rate_window_minutes",
-            params![session.source_id,session.session_id,session.source_name,session.source_kind,session.project,session.model,session.started_at,session.ended_at,session.origin,t.input_tokens,t.cached_input_tokens,t.cache_write_input_tokens,t.output_tokens,t.reasoning_output_tokens,t.total_tokens,session.activity_tokens,session.estimate_microusd,session.token_event_count,session.rate_used_percent,session.rate_window_minutes]
-        ).map_err(|error| error.to_string())?;
-        tx.execute("DELETE FROM turns WHERE source_id=?1 AND session_id=?2", params![session.source_id, session.session_id]).map_err(|error| error.to_string())?;
-        if replace_activity {
-            // Aggregate activity has no per-request timestamps. For resumed suffixes,
-            // retain known counts without guessing how much the snapshots overlap.
-            if !retained_history {
-                tx.execute("DELETE FROM session_activity WHERE source_id=?1 AND session_id=?2", params![session.source_id, session.session_id]).map_err(|error| error.to_string())?;
-            }
-            for (kind, items) in [("skill", &session.activity.skills), ("plugin", &session.activity.plugins), ("effort", &session.activity.efforts)] {
-                for item in items {
-                    tx.execute("INSERT INTO session_activity(source_id,session_id,kind,name,count) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(source_id,session_id,kind,name) DO UPDATE SET count=MAX(session_activity.count,excluded.count)", params![session.source_id,session.session_id,kind,item.name,item.count]).map_err(|error| error.to_string())?;
-                }
-            }
-        }
-        if let Some(turns) = &session.turns {
-            let mut insert = tx.prepare_cached("INSERT INTO turns(source_id,session_id,ordinal,timestamp,model,service_tier,reasoning_effort,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,estimate_microusd,cache_rate) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)").map_err(|error| error.to_string())?;
-            for turn in turns {
-                let t = &turn.tokens;
-                insert.execute(params![session.source_id,session.session_id,turn.ordinal,turn.timestamp,turn.model,turn.service_tier,turn.reasoning_effort,t.input_tokens,t.cached_input_tokens,t.cache_write_input_tokens,t.output_tokens,t.reasoning_output_tokens,t.total_tokens,turn.estimate_microusd,turn.cache_rate]).map_err(|error| error.to_string())?;
-            }
-        }
+        write_session(&tx, &current, replace_activity, retained_history)?;
+        if replace_activity { crate::import_repair::claim_owned_turns(&tx, session)?; }
     }
     tx.commit().map_err(|error| error.to_string())?;
     Ok(retained)
+}
+
+pub(crate) fn write_session(connection: &Connection, session: &SessionAggregate, replace_activity: bool, retained_history: bool) -> Result<(), String> {
+    let t = &session.tokens;
+    connection.execute(
+        "INSERT INTO sessions(source_id,session_id,source_name,source_kind,project,model,started_at,ended_at,origin,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,activity_tokens,estimate_microusd,token_event_count,rate_used_percent,rate_window_minutes) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
+         ON CONFLICT(source_id,session_id) DO UPDATE SET source_name=excluded.source_name,source_kind=excluded.source_kind,project=excluded.project,model=excluded.model,started_at=excluded.started_at,ended_at=excluded.ended_at,origin=excluded.origin,input_tokens=excluded.input_tokens,cached_input_tokens=excluded.cached_input_tokens,cache_write_input_tokens=excluded.cache_write_input_tokens,output_tokens=excluded.output_tokens,reasoning_output_tokens=excluded.reasoning_output_tokens,total_tokens=excluded.total_tokens,activity_tokens=excluded.activity_tokens,estimate_microusd=excluded.estimate_microusd,token_event_count=excluded.token_event_count,rate_used_percent=excluded.rate_used_percent,rate_window_minutes=excluded.rate_window_minutes",
+        params![session.source_id,session.session_id,session.source_name,session.source_kind,session.project,session.model,session.started_at,session.ended_at,session.origin,t.input_tokens,t.cached_input_tokens,t.cache_write_input_tokens,t.output_tokens,t.reasoning_output_tokens,t.total_tokens,session.activity_tokens,session.estimate_microusd,session.token_event_count,session.rate_used_percent,session.rate_window_minutes]
+    ).map_err(|error| error.to_string())?;
+    connection.execute("DELETE FROM turns WHERE source_id=?1 AND session_id=?2", params![session.source_id, session.session_id]).map_err(|error| error.to_string())?;
+    if replace_activity {
+        // Aggregate activity has no per-request timestamps. For resumed suffixes,
+        // retain known counts without guessing how much the snapshots overlap.
+        if !retained_history {
+            connection.execute("DELETE FROM session_activity WHERE source_id=?1 AND session_id=?2", params![session.source_id, session.session_id]).map_err(|error| error.to_string())?;
+        }
+        for (kind, items) in [("skill", &session.activity.skills), ("plugin", &session.activity.plugins), ("effort", &session.activity.efforts)] {
+            for item in items {
+                connection.execute("INSERT INTO session_activity(source_id,session_id,kind,name,count) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(source_id,session_id,kind,name) DO UPDATE SET count=MAX(session_activity.count,excluded.count)", params![session.source_id,session.session_id,kind,item.name,item.count]).map_err(|error| error.to_string())?;
+            }
+        }
+    }
+    if let Some(turns) = &session.turns {
+        let mut insert = connection.prepare_cached("INSERT INTO turns(source_id,session_id,ordinal,timestamp,model,service_tier,reasoning_effort,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,estimate_microusd,cache_rate) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)").map_err(|error| error.to_string())?;
+        for turn in turns {
+            let t = &turn.tokens;
+            insert.execute(params![session.source_id,session.session_id,turn.ordinal,turn.timestamp,turn.model,turn.service_tier,turn.reasoning_effort,t.input_tokens,t.cached_input_tokens,t.cache_write_input_tokens,t.output_tokens,t.reasoning_output_tokens,t.total_tokens,turn.estimate_microusd,turn.cache_rate]).map_err(|error| error.to_string())?;
+        }
+    }
+    let excluded = crate::import_repair::exclusions(connection, &session.source_id, &session.session_id)?;
+    let fingerprint = format!("{:x}", Sha256::digest(serde_json::to_vec(&(&session.turns, excluded)).map_err(|e| e.to_string())?));
+    connection.execute("UPDATE sessions SET sync_fingerprint=?3,aggregation_version=MAX(aggregation_version,?4) WHERE source_id=?1 AND session_id=?2", params![session.source_id,session.session_id,fingerprint,session.aggregation_version]).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn retained_segments(old: &[(String, i64)], incoming: &[TurnUsage]) -> Option<(usize, usize, bool)> {
@@ -405,6 +460,9 @@ mod tests {
             total_tokens,
         };
         SessionAggregate {
+            aggregation_version: 6,
+            sync_fingerprint: String::new(), excluded_usage: Vec::new(),
+            import_identity: None,
             scan_complete: true,
             session_id: "stable-session".into(),
             source_id: "local".into(),
@@ -650,6 +708,9 @@ mod tests {
 
 fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionAggregate> {
     Ok(SessionAggregate {
+        aggregation_version: row.get(23)?,
+        sync_fingerprint: row.get(22)?, excluded_usage: Vec::new(),
+        import_identity: None,
         scan_complete: true,
         source_id: row.get(0)?, session_id: row.get(1)?, source_name: row.get(2)?, source_kind: row.get(3)?,
         project: row.get(4)?, model: row.get(5)?, started_at: row.get(6)?, ended_at: row.get(7)?, origin: row.get(8)?,
@@ -666,7 +727,7 @@ pub fn list_sessions(connection: &Connection, filter: &UsageFilter) -> Result<Ve
         MIN(t.timestamp),MAX(t.timestamp),s.origin,
         SUM(t.input_tokens),SUM(t.cached_input_tokens),SUM(t.cache_write_input_tokens),SUM(t.output_tokens),SUM(t.reasoning_output_tokens),SUM(t.total_tokens),SUM(t.total_tokens),SUM(t.estimate_microusd),COUNT(*),s.rate_used_percent,s.rate_window_minutes,
         SUM(CASE WHEN t.estimate_microusd IS NULL THEN 1 ELSE 0 END),
-        SUM(CASE WHEN t.estimate_microusd IS NULL THEN t.total_tokens ELSE 0 END)
+        SUM(CASE WHEN t.estimate_microusd IS NULL THEN t.total_tokens ELSE 0 END),s.sync_fingerprint,s.aggregation_version
         FROM turns t JOIN sessions s ON s.source_id=t.source_id AND s.session_id=t.session_id
         WHERE t.timestamp >= ?1 AND (?5 IS NULL OR t.timestamp < ?5) AND (?2 IS NULL OR t.source_id=?2) AND (?3 IS NULL OR t.model=?3) AND (?4 IS NULL OR s.project=?4)
         GROUP BY t.source_id,t.session_id ORDER BY MAX(t.timestamp) DESC").map_err(|error| error.to_string())?;
@@ -677,7 +738,7 @@ pub fn list_sessions(connection: &Connection, filter: &UsageFilter) -> Result<Ve
 pub fn list_sync_sessions(connection: &Connection) -> Result<Vec<SessionAggregate>, String> {
     let mut statement = connection.prepare("SELECT source_id,session_id,source_name,source_kind,project,model,started_at,ended_at,origin,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,activity_tokens,estimate_microusd,token_event_count,rate_used_percent,rate_window_minutes,
         CASE WHEN estimate_microusd IS NULL AND total_tokens>0 AND NOT EXISTS (SELECT 1 FROM turns missing WHERE missing.source_id=s.source_id AND missing.session_id=s.session_id) THEN 1 ELSE (SELECT COUNT(*) FROM turns missing WHERE missing.source_id=s.source_id AND missing.session_id=s.session_id AND missing.estimate_microusd IS NULL) END,
-        CASE WHEN estimate_microusd IS NULL AND total_tokens>0 AND NOT EXISTS (SELECT 1 FROM turns missing WHERE missing.source_id=s.source_id AND missing.session_id=s.session_id) THEN total_tokens ELSE COALESCE((SELECT SUM(missing.total_tokens) FROM turns missing WHERE missing.source_id=s.source_id AND missing.session_id=s.session_id AND missing.estimate_microusd IS NULL),0) END
+        CASE WHEN estimate_microusd IS NULL AND total_tokens>0 AND NOT EXISTS (SELECT 1 FROM turns missing WHERE missing.source_id=s.source_id AND missing.session_id=s.session_id) THEN total_tokens ELSE COALESCE((SELECT SUM(missing.total_tokens) FROM turns missing WHERE missing.source_id=s.source_id AND missing.session_id=s.session_id AND missing.estimate_microusd IS NULL),0) END,s.sync_fingerprint,s.aggregation_version
         FROM sessions s ORDER BY ended_at DESC").map_err(|error| error.to_string())?;
     let rows = statement.query_map([], session_from_row).map_err(|error| error.to_string())?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
@@ -710,11 +771,12 @@ pub fn list_period_turns(connection: &Connection, filter: &UsageFilter) -> Resul
 pub fn get_session(connection: &Connection, source_id: &str, session_id: &str) -> Result<SessionAggregate, String> {
     let mut statement = connection.prepare("SELECT source_id,session_id,source_name,source_kind,project,model,started_at,ended_at,origin,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,activity_tokens,estimate_microusd,token_event_count,rate_used_percent,rate_window_minutes,
         CASE WHEN estimate_microusd IS NULL AND total_tokens>0 AND NOT EXISTS (SELECT 1 FROM turns missing WHERE missing.source_id=s.source_id AND missing.session_id=s.session_id) THEN 1 ELSE (SELECT COUNT(*) FROM turns missing WHERE missing.source_id=s.source_id AND missing.session_id=s.session_id AND missing.estimate_microusd IS NULL) END,
-        CASE WHEN estimate_microusd IS NULL AND total_tokens>0 AND NOT EXISTS (SELECT 1 FROM turns missing WHERE missing.source_id=s.source_id AND missing.session_id=s.session_id) THEN total_tokens ELSE COALESCE((SELECT SUM(missing.total_tokens) FROM turns missing WHERE missing.source_id=s.source_id AND missing.session_id=s.session_id AND missing.estimate_microusd IS NULL),0) END
+        CASE WHEN estimate_microusd IS NULL AND total_tokens>0 AND NOT EXISTS (SELECT 1 FROM turns missing WHERE missing.source_id=s.source_id AND missing.session_id=s.session_id) THEN total_tokens ELSE COALESCE((SELECT SUM(missing.total_tokens) FROM turns missing WHERE missing.source_id=s.source_id AND missing.session_id=s.session_id AND missing.estimate_microusd IS NULL),0) END,s.sync_fingerprint,s.aggregation_version
         FROM sessions s WHERE source_id=?1 AND session_id=?2").map_err(|error| error.to_string())?;
     let mut session = statement.query_row(params![source_id, session_id], session_from_row).optional().map_err(|error| error.to_string())?.ok_or_else(|| "找不到 Session".to_string())?;
     let mut turns_statement = connection.prepare("SELECT ordinal,timestamp,model,service_tier,reasoning_effort,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,estimate_microusd,cache_rate FROM turns WHERE source_id=?1 AND session_id=?2 ORDER BY ordinal").map_err(|error| error.to_string())?;
     session.turns = Some(turns_statement.query_map(params![source_id, session_id], |row| Ok(TurnUsage { ordinal: row.get(0)?, timestamp: row.get(1)?, model: row.get(2)?, service_tier: row.get(3)?, reasoning_effort: row.get(4)?, tokens: TokenBreakdown { input_tokens: row.get(5)?, cached_input_tokens: row.get(6)?, cache_write_input_tokens: row.get(7)?, output_tokens: row.get(8)?, reasoning_output_tokens: row.get(9)?, total_tokens: row.get(10)? }, estimate_microusd: row.get(11)?, cache_rate: row.get(12)? })).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?);
+    session.excluded_usage = crate::import_repair::exclusions(connection, source_id, session_id)?;
     Ok(session)
 }
 

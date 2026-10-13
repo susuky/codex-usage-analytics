@@ -101,6 +101,9 @@ function Convert-Counts([hashtable]$Values) {
 
 function Convert-Session([string]$Path) {
     $sessionId = ''
+    $legacySessionId = ''
+    $historyStart = $null
+    $excludedTurns = New-Object System.Collections.Generic.List[object]
     $origin = 'Codex'
     $startedAt = ''
     $endedAt = ''
@@ -133,9 +136,24 @@ function Convert-Session([string]$Path) {
             if (-not $timestamp) { $timestamp = [string](Get-Value $value 'timestamp' '') }
             $kind = [string](Get-Value $value 'type' '')
             $payload = Get-Value $value 'payload' $null
+            $ordinal = Get-Value $value 'ordinal' $null
+            if ($null -ne $historyStart -and $kind -ne 'session_meta' -and $null -eq $ordinal) { $scanComplete = $false }
+            if ($null -ne $historyStart -and $null -ne $ordinal -and $ordinal -lt $historyStart -and $kind -ne 'session_meta') {
+                if ((Get-Value $payload 'type' '') -eq 'token_count') {
+                    $usage = Get-Value (Get-Value $payload 'info' $null) 'last_token_usage' $null
+                    $total = Get-Value $usage 'total_tokens' $null
+                    if ($null -ne $total) { [void]$excludedTurns.Add(@{ timestamp = $timestamp; totalTokens = [long]$total }) }
+                }
+                continue
+            }
             if ($kind -eq 'session_meta') {
-                $sessionId = [string](Get-Value $payload 'id' (Get-Value $payload 'session_id' ''))
-                $startedAt = $timestamp
+                $identity = [string](Get-Value $payload 'id' (Get-Value $payload 'session_id' ''))
+                if (-not $identity) { continue }
+                $legacySessionId = $identity
+                if ($sessionId) { continue }
+                $sessionId = $identity
+                $historyStart = Get-Value $payload 'subagent_history_start_ordinal' $null
+                $startedAt = [string](Get-Value $payload 'timestamp' $timestamp)
                 $endedAt = $startedAt
                 $origin = [string](Get-Value $payload 'originator' 'Codex')
                 $project = Get-ProjectName ([string](Get-Value $payload 'cwd' ''))
@@ -217,7 +235,9 @@ function Convert-Session([string]$Path) {
     }
     [ordered]@{
         scanComplete = $scanComplete
+        aggregationVersion = 6
         sessionId = $sessionId; sourceId = ''; sourceName = ''; sourceKind = 'ssh'
+        importIdentity = $(if ($null -ne $historyStart -or $legacySessionId -ne $sessionId) { @{ legacySessionId = $legacySessionId; excludedTurns = [object[]]$excludedTurns.ToArray() } } else { $null })
         project = $project; model = $model; startedAt = $startedAt; endedAt = $endedAt; origin = $origin
         tokens = $totals; activityTokens = $totals.totalTokens; estimateMicrousd = $null
         tokenEventCount = $turns.Count; rateUsedPercent = $rateUsedPercent; rateWindowMinutes = $rateWindowMinutes

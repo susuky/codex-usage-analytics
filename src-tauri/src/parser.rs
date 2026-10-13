@@ -131,6 +131,9 @@ fn into_counts(map: BTreeMap<String, i64>) -> Vec<NamedCount> {
 
 pub fn parse_session<R: BufRead>(reader: R, source_id: &str, source_name: &str, source_kind: &str) -> Result<SessionAggregate, String> {
     let mut session_id = String::new();
+    let mut legacy_session_id = String::new();
+    let mut history_start = None;
+    let mut excluded_turns = Vec::new();
     let mut origin = "Codex".to_string();
     let mut started_at = String::new();
     let mut ended_at = String::new();
@@ -156,10 +159,29 @@ pub fn parse_session<R: BufRead>(reader: R, source_id: &str, source_name: &str, 
         if line.chars().all(|ch| ch.is_whitespace() || ch == '\0') { continue; }
         let value: Value = match serde_json::from_str(&line) { Ok(value) => value, Err(_) => { scan_complete = false; continue; } };
         let timestamp = value.get("timestamp").and_then(Value::as_str).unwrap_or_default().to_string();
+        if history_start.is_some() && value["type"] != "session_meta" && value.get("ordinal").and_then(Value::as_u64).is_none() {
+            scan_complete = false;
+        }
+        // Ordinals before this boundary are copied model context, not new work.
+        let inherited = history_start.zip(value.get("ordinal").and_then(Value::as_u64))
+            .is_some_and(|(start, ordinal)| ordinal < start);
+        if inherited && value.get("type").and_then(Value::as_str) != Some("session_meta") {
+            if value["payload"]["type"] == "token_count" {
+                if let Some(total_tokens) = value["payload"]["info"]["last_token_usage"]["total_tokens"].as_i64() {
+                    excluded_turns.push(crate::models::UsageIdentity { timestamp, total_tokens });
+                }
+            }
+            continue;
+        }
         match value.get("type").and_then(Value::as_str) {
             Some("session_meta") => {
                 let payload = &value["payload"];
-                session_id = payload.get("id").or_else(|| payload.get("session_id")).and_then(Value::as_str).unwrap_or_default().to_string();
+                let id = payload.get("id").or_else(|| payload.get("session_id")).and_then(Value::as_str).unwrap_or_default();
+                if id.is_empty() { continue; }
+                legacy_session_id = id.to_string();
+                if !session_id.is_empty() { continue; }
+                session_id = id.to_string();
+                history_start = payload.get("subagent_history_start_ordinal").and_then(Value::as_u64);
                 started_at = payload.get("timestamp").and_then(Value::as_str).unwrap_or(&timestamp).to_string();
                 ended_at = started_at.clone();
                 origin = payload.get("originator").and_then(Value::as_str).unwrap_or("Codex").to_string();
@@ -249,7 +271,10 @@ pub fn parse_session<R: BufRead>(reader: R, source_id: &str, source_name: &str, 
     for turn in &turns { totals.add_assign(&turn.tokens); }
     let (estimate_microusd, unpriced_turn_count, unpriced_tokens) = summarize_session_estimate(&turns, totals.total_tokens);
     Ok(SessionAggregate {
+        aggregation_version: 6,
+        sync_fingerprint: String::new(), excluded_usage: Vec::new(),
         scan_complete,
+        import_identity: (history_start.is_some() || legacy_session_id != session_id).then_some(crate::models::ImportIdentity { legacy_session_id, excluded_turns }),
         session_id, source_id: source_id.into(), source_name: source_name.into(), source_kind: source_kind.into(),
         project, model, started_at, ended_at, origin, activity_tokens: totals.total_tokens, tokens: totals, estimate_microusd,
         unpriced_turn_count, unpriced_tokens,

@@ -78,9 +78,18 @@ pub fn normalize_service_tier(value: &str) -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionAggregate {
+    #[serde(default = "legacy_aggregation_version")]
+    pub aggregation_version: i64,
+    #[serde(default)]
+    pub sync_fingerprint: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excluded_usage: Vec<UsageIdentity>,
     #[serde(default = "scan_complete_default")]
     pub scan_complete: bool,
     pub session_id: String,
+    // Import-only evidence; database/cloud projections do not carry it forward.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_identity: Option<ImportIdentity>,
     pub source_id: String,
     pub source_name: String,
     pub source_kind: String,
@@ -105,7 +114,22 @@ pub struct SessionAggregate {
     pub turns: Option<Vec<TurnUsage>>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportIdentity {
+    pub legacy_session_id: String,
+    pub excluded_turns: Vec<UsageIdentity>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageIdentity {
+    pub timestamp: String,
+    pub total_tokens: i64,
+}
+
 fn scan_complete_default() -> bool { true }
+fn legacy_aggregation_version() -> i64 { 5 }
 
 #[derive(Debug, Default)]
 pub struct ScanBatch {

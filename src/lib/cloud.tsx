@@ -2,7 +2,7 @@ import { createClient, type Session, type SupportedStorage, type SupabaseClient 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { listSyncSessions, getSessionDetail, getSettings, getSyncState, saveSyncState, mergeCloudSessions, saveSettings, secureGet, secureRemove, secureSet } from "./api";
-import { downloadPayload, fingerprint, localKey, queueSnapshots, remoteFingerprint, uploadPayload, type CloudSnapshot, type SessionRow } from "./cloudSync";
+import { downloadPayload, hashKey, fingerprint, localKey, queueSnapshots, remoteFingerprint, uploadPayload, type CloudSnapshot, type SessionRow } from "./cloudSync";
 import { useUsageData } from "./data";
 import type { OverviewData, SyncStatus } from "../types";
 
@@ -88,20 +88,6 @@ export function CloudProvider({ children }: { children: ReactNode }) {
           if (result.error) throw result.error;
           if (result.data?.paused) throw new Error("雲端統計已清除；按立即同步可重新啟用");
         }
-        const sessions = await listSyncSessions();
-        for (const item of sessions.filter((s) => s.sourceKind !== "cloud" && state.pending[localKey(s)])) {
-          signal.throwIfAborted();
-          const detail = await getSessionDetail(item.sourceId,item.sessionId);
-          const result = await client!.rpc("sync_usage_session_v3", await uploadPayload(account,detail)).abortSignal(signal);
-          if (result.error) throw result.error;
-          // False means the server already holds a newer complete copy. Pull it below;
-          // do not repeatedly send this older version on every retry.
-          state.acknowledged[localKey(item)] = fingerprint(detail);
-          delete state.pending[localKey(item)];
-          await saveSyncState(account,state);
-          setStatus((current) => ({ ...current,pendingRows:Object.keys(state.pending).length }));
-        }
-
         const rows = new Map<string,SessionRow>();
         for (let offset=0;;offset+=500) {
           signal.throwIfAborted();
@@ -109,10 +95,11 @@ export function CloudProvider({ children }: { children: ReactNode }) {
           if (result.error) throw result.error;
           for (const row of (result.data ?? []) as SessionRow[]) {
             const previous = rows.get(row.session_key);
-            if (!previous || row.token_event_count>previous.token_event_count || (row.token_event_count===previous.token_event_count && row.observed_at>previous.observed_at)) rows.set(row.session_key,row);
+            if (!previous || row.aggregation_version>previous.aggregation_version || (row.aggregation_version===previous.aggregation_version && (row.token_event_count>previous.token_event_count || (row.token_event_count===previous.token_event_count && row.observed_at>previous.observed_at)))) rows.set(row.session_key,row);
           }
           if ((result.data?.length ?? 0)<500) break;
         }
+        const pendingKeys = new Set(await Promise.all((await listSyncSessions()).filter(item => state.pending[localKey(item)]).map(item => hashKey(account,item.sessionId))));
         for (const row of rows.values()) {
           signal.throwIfAborted();
           const remoteVersion = remoteFingerprint(row);
@@ -122,10 +109,29 @@ export function CloudProvider({ children }: { children: ReactNode }) {
           if (result.error) throw result.error;
           if (!result.data) continue;
           const snapshot = result.data as CloudSnapshot;
-          await mergeCloudSessions(account,[downloadPayload(snapshot)]);
+          rows.set(row.session_key,snapshot.session);
+          await mergeCloudSessions(account,[downloadPayload(snapshot,pendingKeys.has(row.session_key))]);
           state.acknowledged[ackKey] = remoteFingerprint(snapshot.session);
           await saveSyncState(account,state);
         }
+        const sessions = await listSyncSessions();
+        Object.assign(state, queueSnapshots(state, sessions));
+        await saveSyncState(account,state);
+        for (const item of sessions.filter((s) => s.sourceKind !== "cloud" && state.pending[localKey(s)])) {
+          signal.throwIfAborted();
+          const detail = await getSessionDetail(item.sourceId,item.sessionId);
+          const sessionKey = await hashKey(account, detail.sessionId);
+          const result = await client!.rpc("sync_usage_session_v3", await uploadPayload(account,detail,rows.get(sessionKey)?.sync_revision ?? null)).abortSignal(signal);
+          if (result.error) throw result.error;
+          // Never acknowledge a snapshot the server rejected. A concurrent write is
+          // downloaded on the next retry before attempting the pending upload again.
+          if (result.data !== true) throw new Error("雲端資料已更新，這筆修正尚未上傳，將重新下載後重試");
+          state.acknowledged[localKey(item)] = fingerprint(detail);
+          delete state.pending[localKey(item)];
+          await saveSyncState(account,state);
+          setStatus((current) => ({ ...current,pendingRows:Object.keys(state.pending).length }));
+        }
+
         state.lastSyncedAt = new Date().toISOString();
         await saveSyncState(account,state);
         setStatus((current) => ({ ...current,pendingRows:Object.keys(state.pending).length,lastSyncedAt:state.lastSyncedAt,lastError:null }));

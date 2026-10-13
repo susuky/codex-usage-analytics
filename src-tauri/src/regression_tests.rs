@@ -14,6 +14,145 @@ fn fixture() -> String {
     lines.into_iter().map(|line| line.to_string()+"\n").collect()
 }
 
+fn subagent_fixture() -> String {
+    let records = [
+        json!({"type":"session_meta","timestamp":"2026-10-13T01:00:00Z","payload":{"id":"child","timestamp":"2026-10-13T01:00:00Z","cwd":"C:/child","originator":"child-origin","subagent_history_start_ordinal":6}}),
+        json!({"type":"session_meta","ordinal":1,"timestamp":"2026-10-12T01:00:00Z","payload":{"id":"parent","cwd":"C:/parent","originator":"parent-origin"}}),
+        json!({"type":"turn_context","ordinal":2,"payload":{"model":"old-model","effort":"low"}}),
+        json!({"type":"event_msg","ordinal":3,"timestamp":"2026-10-12T01:00:01Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":999,"total_tokens":999},"total_token_usage":{"input_tokens":999,"total_tokens":999}}}}),
+        json!({"type":"response_item","ordinal":4,"payload":{"type":"custom_tool_call","name":"exec","input":"cat /skills/copied-parent-skill/SKILL.md"}}),
+        json!({"type":"event_msg","ordinal":6,"payload":{"type":"thread_settings_applied","thread_settings":{"model":"gpt-5.6-sol","service_tier":"fast"}}}),
+        json!({"type":"turn_context","ordinal":7,"payload":{"model":"gpt-5.6-sol","effort":"high"}}),
+        json!({"type":"event_msg","ordinal":8,"timestamp":"2026-10-13T01:00:01Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":110,"total_tokens":110},"total_token_usage":{"input_tokens":110,"total_tokens":110}}}}),
+        json!({"type":"event_msg","ordinal":9,"timestamp":"2026-10-13T01:00:02Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":220,"total_tokens":220},"total_token_usage":{"input_tokens":330,"total_tokens":330}}}}),
+    ];
+    records.into_iter().map(|r| r.to_string()+"\n").collect()
+}
+
+#[test]
+fn subagent_identity_and_owned_history_match_all_scanners() {
+    let root = temp(); std::fs::create_dir(root.join("sessions")).unwrap();
+    let log = subagent_fixture();
+    std::fs::write(root.join("sessions/child.jsonl"), &log).unwrap();
+    let local = parse_session(Cursor::new(&log), "local", "Local", "local").unwrap();
+    let mut results = vec![local];
+    let python = format!("SINCE_ISO = ''\nCODEX_HOME = {}\n{}", serde_json::to_string(&root.to_string_lossy()).unwrap(), include_str!("remote_scan.py"));
+    let mut scripts = vec![("python", python)];
+    if cfg!(windows) { scripts.push(("powershell.exe", format!("$SinceIso = ''\n$CodexHome = '{}'\n{}", root.display(), include_str!("remote_scan.ps1")))); }
+    for (program, script) in scripts {
+        let mut command = std::process::Command::new(program);
+        if program == "python" { command.arg("-"); }
+        else { command.args(crate::ssh::windows_script_command(script.len()).split_whitespace().skip(1)); }
+        let output = bounded_output(&mut command, script.into_bytes(), Duration::from_secs(45)).unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        results.push(serde_json::from_str::<SessionAggregate>(String::from_utf8_lossy(&output.stdout).lines().next().unwrap()).unwrap());
+    }
+    for parsed in results {
+        assert_eq!(parsed.session_id, "child");
+        assert_eq!(parsed.started_at, "2026-10-13T01:00:00Z");
+        assert_eq!(parsed.project, "child");
+        assert_eq!(parsed.origin, "child-origin");
+        assert_eq!(parsed.tokens.total_tokens, 330);
+        assert_eq!(parsed.token_event_count, 2);
+        assert!(parsed.activity.skills.is_empty());
+        assert_eq!(parsed.activity.efforts[0].name, "high");
+        assert!(parsed.turns.unwrap().iter().all(|t| t.service_tier == "priority" && t.model == "gpt-5.6-sol"));
+        let identity = parsed.import_identity.unwrap();
+        assert_eq!(identity.legacy_session_id, "parent");
+        assert_eq!(identity.excluded_turns[0].total_tokens, 999);
+    }
+    // Older logs without ordinals still retain usage and their first identity.
+    let old: String = log.lines().map(|line| { let mut v: serde_json::Value = serde_json::from_str(line).unwrap(); v.as_object_mut().unwrap().remove("ordinal"); v.to_string()+"\n" }).collect();
+    let old = parse_session(Cursor::new(old), "local", "Local", "local").unwrap();
+    assert_eq!(old.session_id, "child");
+    assert_eq!(old.tokens.total_tokens, 1329);
+    assert!(!old.scan_complete);
+}
+
+#[test]
+fn subagent_upgrade_reassigns_legacy_usage_without_loss_or_double_counting() {
+    let root = temp(); let path = root.join("usage.sqlite3");
+    std::fs::create_dir(root.join("sessions")).unwrap();
+    let child_log = subagent_fixture();
+    std::fs::write(root.join("sessions/child.jsonl"), &child_log).unwrap();
+    let child = parse_session(Cursor::new(&child_log), "local", "Local", "local").unwrap();
+    let parent_log = fixture().replace("regression", "parent");
+    std::fs::write(root.join("sessions/parent.jsonl"), &parent_log).unwrap();
+    let mut connection = db::open(&path).unwrap();
+    let mut wrong_parent = child.clone(); wrong_parent.session_id = "parent".into(); wrong_parent.import_identity = None;
+    db::save_sessions(&mut connection, &[wrong_parent.clone()]).unwrap();
+    // Also simulate a child stored with copied input before the ordinal fix.
+    let mut wrong_child = parse_session(Cursor::new(child_log.replace("subagent_history_start_ordinal", "unused_boundary")), "local", "Local", "local").unwrap();
+    wrong_child.import_identity = None;
+    db::save_sessions(&mut connection, &[wrong_child.clone()]).unwrap();
+    connection.execute("INSERT INTO file_checkpoints VALUES('old-checkpoint',123,'unchanged')", []).unwrap();
+    connection.execute("DELETE FROM settings WHERE key='data_revision:subagent-identity-v1'", []).unwrap();
+    drop(connection);
+    let mut connection = db::open(&path).unwrap();
+    assert_eq!(connection.query_row("SELECT COUNT(*) FROM file_checkpoints", [], |r| r.get::<_,i64>(0)).unwrap(), 0);
+    let batch = crate::scanner::scan_local(&root, &mut connection, false).unwrap();
+    assert_eq!(batch.skipped_files, 0);
+    assert_eq!(db::get_session(&connection,"local","child").unwrap().tokens.total_tokens, 330);
+    assert_eq!(db::get_session(&connection,"local","parent").unwrap().tokens.total_tokens, 485);
+    assert!(!crate::import_repair::pending(&connection,"local").unwrap());
+    // Cloud snapshots produced by the old parser cannot resurrect wrong ownership.
+    db::save_cloud_sessions(&mut connection, &[wrong_parent, wrong_child]).unwrap();
+    assert_eq!(db::get_session(&connection,"local","child").unwrap().tokens.total_tokens, 330);
+    assert_eq!(db::get_session(&connection,"local","parent").unwrap().tokens.total_tokens, 485);
+    assert!(crate::scanner::scan_local(&root, &mut connection, false).unwrap().sessions.is_empty());
+    crate::scanner::scan_local(&root, &mut connection, true).unwrap();
+    assert_eq!(connection.query_row("SELECT SUM(total_tokens) FROM sessions", [], |r| r.get::<_,i64>(0)).unwrap(), 815);
+    // An unmatched old observation must survive without blocking earlier own work.
+    let mut orphan = child.clone(); orphan.import_identity = None;
+    orphan.turns.as_mut().unwrap()[0].timestamp = "2026-10-13T01:00:01.500Z".into();
+    connection.execute("DELETE FROM sessions WHERE session_id='child'", []).unwrap();
+    connection.execute("DELETE FROM turns WHERE session_id='child'", []).unwrap();
+    db::save_sessions(&mut connection, &[orphan]).unwrap();
+    db::save_sessions(&mut connection, &[child.clone()]).unwrap();
+    let recovered = db::get_session(&connection,"local","child").unwrap();
+    assert_eq!(recovered.tokens.total_tokens, 440);
+    assert_eq!(recovered.token_event_count, 3);
+    db::save_sessions(&mut connection, &[child]).unwrap();
+    assert_eq!(db::get_session(&connection,"local","child").unwrap().tokens.total_tokens, 440);
+}
+
+#[test]
+fn subagent_repair_requires_complete_saved_evidence_and_stays_within_its_source() {
+    let root = temp(); let mut connection = db::open(&root.join("usage.sqlite3")).unwrap();
+    let child = parse_session(Cursor::new(subagent_fixture()), "local", "Local", "local").unwrap();
+    let mut legacy = child.clone(); legacy.session_id = "parent".into(); legacy.import_identity = None;
+    let mut remote = legacy.clone(); remote.source_id = "ssh-other".into(); remote.source_kind = "ssh".into();
+    db::save_sessions(&mut connection, &[legacy.clone(), remote]).unwrap();
+    let mut damaged = child.clone(); damaged.scan_complete = false;
+    assert_eq!(db::save_sessions(&mut connection, &[damaged]).unwrap(), 1);
+    assert!(db::get_session(&connection,"local","child").is_err());
+    assert_eq!(db::get_session(&connection,"local","parent").unwrap().tokens.total_tokens, 330);
+    // A rejected earlier conflicting child observation must never be moved.
+    let mut saved_child = child.clone(); saved_child.import_identity = None;
+    saved_child.turns.as_mut().unwrap()[0].tokens.input_tokens = 111;
+    saved_child.turns.as_mut().unwrap()[0].tokens.total_tokens = 111;
+    saved_child.tokens.input_tokens += 1; saved_child.tokens.total_tokens += 1;
+    db::save_sessions(&mut connection, &[saved_child]).unwrap();
+    db::save_sessions(&mut connection, &[child]).unwrap();
+    assert_eq!(db::get_session(&connection,"local","parent").unwrap().tokens.total_tokens, 330);
+    assert_eq!(db::get_session(&connection,"ssh-other","parent").unwrap().tokens.total_tokens, 330);
+}
+
+#[test]
+fn incomplete_new_child_does_not_abort_other_local_imports() {
+    let root=temp();std::fs::create_dir(root.join("sessions")).unwrap();
+    let mut lines:Vec<serde_json::Value>=subagent_fixture().lines().map(|line|serde_json::from_str(line).unwrap()).collect();
+    lines[7].as_object_mut().unwrap().remove("ordinal");
+    std::fs::write(root.join("sessions/child.jsonl"),lines.iter().map(|line|line.to_string()+"\n").collect::<String>()).unwrap();
+    std::fs::write(root.join("sessions/parent.jsonl"),fixture()).unwrap();
+    let mut connection=db::open(&root.join("usage.sqlite3")).unwrap();
+    let result=crate::scanner::scan_local(&root,&mut connection,false).unwrap();
+    assert_eq!(result.skipped_files,1);
+    assert_eq!(result.sessions.len(),1);
+    assert_eq!(db::get_session(&connection,"local","regression").unwrap().tokens.total_tokens,485);
+    assert!(db::get_session(&connection,"local","child").is_err());
+}
+
 #[test]
 fn auto_review_usage_survives_imports_and_legacy_price_upgrade_without_charges() {
     let root = temp();
@@ -263,7 +402,7 @@ fn cloud_copy_merges_without_doubling_and_rejects_a_shorter_download() {
     let user="00000000-0000-0000-0000-000000000001";
     let key=format!("{:x}",Sha256::digest(format!("{user}:regression").as_bytes()));
     let original=parse_session(Cursor::new(fixture()),"local","Local","local").unwrap();
-    merge(&mut connection,user,vec![Download{session_key:key.clone(),session:original.clone()}]).unwrap();
+    merge(&mut connection,user,vec![Download{prefer_local:false,session_key:key.clone(),session:original.clone()}]).unwrap();
     let mut local=original.clone();
     local.turns.as_mut().unwrap().iter_mut().for_each(|t|t.timestamp=t.timestamp.replace('Z',"+00:00"));
     db::save_sessions(&mut connection,&[local.clone()]).unwrap();
@@ -271,7 +410,7 @@ fn cloud_copy_merges_without_doubling_and_rejects_a_shorter_download() {
     let count:i64=connection.query_row("SELECT COUNT(*) FROM sessions",[],|row|row.get(0)).unwrap();
     assert_eq!(count,1);
     let mut short=original.clone(); short.turns.as_mut().unwrap().truncate(1); short.token_event_count=1; short.tokens=short.turns.as_ref().unwrap()[0].tokens.clone();
-    merge(&mut connection,user,vec![Download{session_key:key,session:short}]).unwrap();
+    merge(&mut connection,user,vec![Download{prefer_local:false,session_key:key,session:short}]).unwrap();
     assert_eq!(db::get_session(&connection,"local","regression").unwrap().token_event_count,4);
 }
 
@@ -467,6 +606,106 @@ fn activity_rows(connection: &rusqlite::Connection) -> Vec<(String, String, i64)
         .collect::<Result<Vec<_>, _>>().unwrap()
 }
 
+#[test]
+fn disjoint_segments_merge_in_any_order_without_double_counting_same_time_requests() {
+    for reverse in [false, true] {
+        let root = temp(); std::fs::create_dir(root.join("sessions")).unwrap();
+        let original = fixture().lines().take(5).collect::<Vec<_>>().join("\n")+"\n";
+        let lines: Vec<_> = original.lines().collect();
+        let segments = [format!("{}\n{}\n{}\n",lines[0],lines[1],lines[2]),
+            format!("{}\n{}\n{}\n{}\n",lines[0],lines[1],lines[3],lines[4])];
+        for (index, segment) in segments.iter().enumerate() { std::fs::write(root.join(format!("sessions/{index}.jsonl")), segment).unwrap(); }
+        let mut connection = db::open(&root.join("usage.sqlite3")).unwrap();
+        let order = if reverse { [1,0,1,0] } else { [0,1,0,1] };
+        for index in order {
+            let parsed = parse_session(Cursor::new(&segments[index]), "local", "Local", "local").unwrap();
+            assert_eq!(db::save_sessions(&mut connection, &[parsed]).unwrap(), 0);
+        }
+        assert_eq!(db::get_session(&connection,"local","regression").unwrap().tokens.total_tokens,385);
+        crate::scanner::scan_local(&root,&mut connection,true).unwrap();
+        let mut saved = db::get_session(&connection,"local","regression").unwrap();
+        assert_eq!(saved.token_event_count,3);
+        // Real logs can record distinct requests in the same millisecond.
+        saved.turns.as_mut().unwrap()[1].timestamp=saved.turns.as_ref().unwrap()[0].timestamp.clone();
+        let fresh=temp(); let mut other=db::open(&fresh.join("usage.sqlite3")).unwrap();
+        db::save_sessions(&mut other,&[saved.clone()]).unwrap();
+        let mut earlier=saved.clone(); earlier.turns.as_mut().unwrap().truncate(1);
+        earlier.token_event_count=1; earlier.tokens=earlier.turns.as_ref().unwrap()[0].tokens.clone();
+        db::save_sessions(&mut other,&[earlier]).unwrap();
+        assert_eq!(db::get_session(&other,"local","regression").unwrap().token_event_count,3);
+    }
+}
+
+#[test]
+fn downloaded_removals_survive_restart_rescan_and_cloud_to_local_reconciliation() {
+    use crate::cloud_store::{Download, merge, reconcile};
+    use sha2::{Digest,Sha256};
+    let user="00000000-0000-0000-0000-000000000001";
+    let key=format!("{:x}",Sha256::digest(format!("{user}:regression").as_bytes()));
+    let root=temp(); let path=root.join("usage.sqlite3");
+    let mut connection=db::open(&path).unwrap();
+    let old=parse_session(Cursor::new(activity_fixture()),"local","Local","local").unwrap();
+    let mut correction=old.clone();
+    let removed=correction.turns.as_mut().unwrap().remove(0);
+    correction.excluded_usage.push(UsageIdentity{timestamp:removed.timestamp.clone(),total_tokens:removed.tokens.total_tokens});
+    correction.tokens=TokenBreakdown::default();
+    for (i,t) in correction.turns.as_mut().unwrap().iter_mut().enumerate(){t.ordinal=i as i64+1;correction.tokens.add_assign(&t.tokens);}
+    correction.token_event_count-=1;
+    merge(&mut connection,user,vec![Download{prefer_local:false,session_key:key.clone(),session:correction.clone()}]).unwrap();
+    db::save_sessions(&mut connection,&[old.clone()]).unwrap();
+    reconcile(&mut connection).unwrap();
+    assert_eq!(db::get_session(&connection,"local","regression").unwrap().tokens,correction.tokens);
+    assert_eq!(connection.query_row("SELECT COUNT(*) FROM sessions WHERE source_kind='cloud'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    let before=db::get_session(&connection,"local","regression").unwrap();
+    drop(connection);let mut connection=db::open(&path).unwrap();
+    db::save_sessions(&mut connection,&[old.clone()]).unwrap();
+    db::save_cloud_sessions(&mut connection,&[old]).unwrap();
+    let saved=db::get_session(&connection,"local","regression").unwrap();
+    assert_eq!(saved.tokens,correction.tokens);
+    assert_eq!(saved.excluded_usage.len(),1);
+    // Equal-total model/tier corrections still invalidate the upload queue.
+    let mut changed=saved.clone();changed.turns.as_mut().unwrap()[0].reasoning_effort="medium".into();
+    db::save_sessions(&mut connection,&[changed]).unwrap();
+    assert_ne!(db::get_session(&connection,"local","regression").unwrap().sync_fingerprint,before.sync_fingerprint);
+}
+
+#[test]
+fn download_before_upload_keeps_unsent_raw_model_and_fast_corrections() {
+    use crate::cloud_store::{Download,merge};
+    use sha2::{Digest,Sha256};
+    let user="00000000-0000-0000-0000-000000000001";
+    let key=format!("{:x}",Sha256::digest(format!("{user}:regression").as_bytes()));
+    let root=temp();let mut connection=db::open(&root.join("usage.sqlite3")).unwrap();
+    let mut current=parse_session(Cursor::new(fixture()),"local","Local","local").unwrap();
+    current.turns.as_mut().unwrap()[0].service_tier="priority".into();
+    db::save_sessions(&mut connection,&[current.clone()]).unwrap();
+    let mut stale=current.clone();stale.turns.as_mut().unwrap()[0].service_tier="default".into();
+    stale.turns.as_mut().unwrap()[0].model="older-model".into();
+    for (version,prefer_local) in [(5,false),(6,true)] {
+        stale.aggregation_version=version;
+        merge(&mut connection,user,vec![Download{prefer_local,session_key:key.clone(),session:stale.clone()}]).unwrap();
+        let saved=db::get_session(&connection,"local","regression").unwrap();
+        assert_eq!(saved.turns.as_ref().unwrap()[0].service_tier,"priority");
+        assert_eq!(saved.turns.as_ref().unwrap()[0].model,current.turns.as_ref().unwrap()[0].model);
+    }
+    // The cloud can insert an earlier request while local metadata stays newer.
+    // Preserving a local turn must not copy its old ordinal onto a different row.
+    let mut expanded=stale.clone();expanded.aggregation_version=5;
+    let mut earlier=expanded.turns.as_ref().unwrap()[0].clone();earlier.timestamp="2026-09-05T01:00:00.500Z".into();
+    expanded.turns.as_mut().unwrap().insert(0,earlier);
+    expanded.tokens=TokenBreakdown::default();expanded.token_event_count+=1;
+    for (i,t) in expanded.turns.as_mut().unwrap().iter_mut().enumerate(){t.ordinal=i as i64+1;expanded.tokens.add_assign(&t.tokens);}
+    merge(&mut connection,user,vec![Download{prefer_local:true,session_key:key.clone(),session:expanded}]).unwrap();
+    let merged=db::get_session(&connection,"local","regression").unwrap();
+    assert_eq!(merged.token_event_count,5);
+    assert_eq!(merged.turns.unwrap()[1].service_tier,"priority");
+    let fresh=temp();let mut fresh=db::open(&fresh.join("usage.sqlite3")).unwrap();
+    merge(&mut fresh,user,vec![Download{prefer_local:false,session_key:key.clone(),session:current}]).unwrap();
+    stale.aggregation_version=5;
+    merge(&mut fresh,user,vec![Download{prefer_local:false,session_key:key.clone(),session:stale}]).unwrap();
+    assert_eq!(db::get_session(&fresh,&format!("cloud:{user}"),&key).unwrap().turns.unwrap()[0].service_tier,"priority");
+}
+
 fn corrected_cloud_copy(mut session: SessionAggregate) -> SessionAggregate {
     session.activity = SessionActivity::default();
     let tokens = &mut session.turns.as_mut().unwrap()[0].tokens;
@@ -503,7 +742,7 @@ fn cloud_download_preserves_local_and_ssh_activity_when_unchanged_logs_are_skipp
         let incoming = corrected_cloud_copy(original.clone());
         assert_eq!(incoming.tokens.total_tokens, original.tokens.total_tokens);
         for _ in 0..2 {
-            merge(&mut connection, user, vec![Download { session_key: key.clone(), session: incoming.clone() }]).unwrap();
+            merge(&mut connection, user, vec![Download { prefer_local: false, session_key: key.clone(), session: incoming.clone() }]).unwrap();
             assert_eq!(db::get_session(&connection, source, "regression").unwrap().tokens, incoming.tokens);
             assert_eq!(activity_rows(&connection), activity);
         }
@@ -527,7 +766,7 @@ fn cloud_reconciliation_preserves_activity_when_a_download_later_becomes_local()
     let key = format!("{:x}", Sha256::digest(format!("{user}:regression").as_bytes()));
     let local = parse_session(Cursor::new(activity_fixture()), "local", "Local", "local").unwrap();
     let incoming = corrected_cloud_copy(local.clone());
-    merge(&mut connection, user, vec![Download { session_key: key, session: incoming.clone() }]).unwrap();
+    merge(&mut connection, user, vec![Download { prefer_local: false, session_key: key, session: incoming.clone() }]).unwrap();
     assert!(activity_rows(&connection).is_empty());
     db::save_sessions(&mut connection, &[local]).unwrap();
     let activity = activity_rows(&connection);

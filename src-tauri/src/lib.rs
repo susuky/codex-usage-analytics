@@ -1,6 +1,7 @@
 mod db;
 mod models;
 mod parser;
+mod import_repair;
 mod pricing;
 mod pricing_update;
 mod scanner;
@@ -82,11 +83,24 @@ fn scan_sources_blocking(db_path: PathBuf, force_full: bool) -> Result<ScanResul
                 let mut item = source(&remote.id, &remote.name, "ssh", Some(remote.target.clone()), remote.enabled);
                 item.last_scanned_at = previous_sources.get(&remote.id).and_then(|old| old.last_scanned_at.clone());
                 db::upsert_source(&remote_connection, &item)?;
-                let since = if force_full { None } else { item.last_scanned_at.as_deref() };
+                let repairing = import_repair::pending(&remote_connection, &remote.id)?;
+                let since = if force_full || repairing { None } else { item.last_scanned_at.as_deref() };
                 let result = if remote.enabled {
-                    ssh::scan_remote(&remote.target, &remote.codex_home, &remote.id, &remote.name, since, |session| {
+                    let first = ssh::scan_remote(&remote.target, &remote.codex_home, &remote.id, &remote.name, since, |session| {
                         db::save_sessions(&mut remote_connection, &[session])
-                    })
+                    });
+                    if first.as_ref().map_or(true, |batch| batch.skipped_files > 0) {
+                        first
+                    } else if let Some(revision) = import_repair::revision(&remote_connection, &remote.id)? {
+                        let second = ssh::scan_remote(&remote.target, &remote.codex_home, &remote.id, &remote.name, None, |session| {
+                            db::save_sessions(&mut remote_connection, &[session])
+                        });
+                        if second.as_ref().is_ok_and(|batch| batch.skipped_files == 0)
+                            && import_repair::revision(&remote_connection, &remote.id)? == Some(revision) {
+                            import_repair::set_pending(&remote_connection, &remote.id, false)?;
+                        }
+                        second
+                    } else { first }
                 } else { Ok(ssh::RemoteScanSummary::default()) };
                 let mut count = 0;
                 match result {

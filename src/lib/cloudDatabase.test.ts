@@ -22,6 +22,48 @@ function snapshot(count:number, key="a".repeat(64)) {
   return {row,turns};
 }
 async function upload(value:ReturnType<typeof snapshot>) { return pg.query<{accepted:boolean}>("select public.sync_usage_session_v3($1::jsonb,$2::jsonb) as accepted",[JSON.stringify(value.row),JSON.stringify(value.turns)]); }
+
+it("propagates removals to a fresh device and rejects both legacy writes and concurrent stale corrections", async () => {
+  await account(first);
+  const legacy=snapshot(3,"f".repeat(64));
+  const download=async () => (await pg.query<{data:CloudSnapshot}>("select get_usage_session_v3($1,$2) data",[legacy.row.source_key,legacy.row.session_key])).rows[0].data;
+  await upload(legacy);
+  const before=await download();
+  const corrected={row:{...legacy.row,aggregation_version:6,base_revision:before.session.sync_revision,token_event_count:2,
+    input_tokens:200,total_tokens:200,estimate_microusd:800,
+    excluded_usage:[{timestamp:legacy.turns[2].occurred_at,total_tokens:100}]},turns:legacy.turns.slice(0,2)};
+  expect((await upload(corrected)).rows[0].accepted).toBe(true);
+  const fresh=await download();
+  expect(fresh.turns).toHaveLength(2);
+  expect(fresh.session.excluded_usage).toHaveLength(1);
+  expect(fresh.session.aggregation_version).toBe(6);
+  expect((await upload(legacy)).rows[0].accepted).toBe(false);
+  expect((await upload(corrected)).rows[0].accepted).toBe(false);
+  corrected.row.base_revision=fresh.session.sync_revision;
+  expect((await upload(corrected)).rows[0].accepted).toBe(true);
+  const latest=await download();
+  const empty={row:{...corrected.row,base_revision:latest.session.sync_revision,token_event_count:0,input_tokens:0,total_tokens:0,estimate_microusd:0,
+    excluded_usage:legacy.turns.map(t=>({timestamp:t.occurred_at,total_tokens:t.total_tokens}))},turns:[]};
+  expect((await upload(empty)).rows[0].accepted).toBe(true);
+  expect((await download()).turns).toEqual([]);
+  expect((await upload(legacy)).rows[0].accepted).toBe(false);
+  await pg.exec("reset role");
+  await pg.query("delete from usage_sessions where user_id=$1 and session_key=$2",[first,legacy.row.session_key]);
+});
+
+it("refuses an unproven smaller snapshot and rolls back malformed correction data", async () => {
+  await account(first);
+  const value=snapshot(2,"1".repeat(64));await upload(value);
+  const saved=(await pg.query<{data:CloudSnapshot}>("select get_usage_session_v3($1,$2) data",[value.row.source_key,value.row.session_key])).rows[0].data;
+  const smaller={row:{...snapshot(1,"1".repeat(64)).row,aggregation_version:6,base_revision:saved.session.sync_revision,excluded_usage:[] as unknown[]},turns:value.turns.slice(0,1)};
+  expect((await upload(smaller)).rows[0].accepted).toBe(false);
+  smaller.row.excluded_usage=[{timestamp:null,total_tokens:100}];
+  await expect(upload(smaller)).rejects.toThrow("Invalid correction evidence");
+  const bad={row:{...value.row,input_tokens:999},turns:value.turns};
+  await expect(upload(bad)).rejects.toThrow("Token breakdown does not match turns");
+  expect((await pg.query<{n:number}>("select count(*)::int n from usage_turns where session_key=$1",[value.row.session_key])).rows[0].n).toBe(2);
+  await pg.exec("reset role");await pg.query("delete from usage_sessions where user_id=$1 and session_key=$2",[first,value.row.session_key]);
+});
 it("atomic upserts are idempotent and stale device cannot prune newer turns",async () => {
   await account(first);
   expect((await upload(snapshot(120))).rows[0].accepted).toBe(true);

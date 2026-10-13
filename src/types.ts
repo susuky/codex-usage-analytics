@@ -21,6 +21,9 @@ export interface TurnUsage {
 }
 
 export interface SessionAggregate {
+  aggregationVersion?: number;
+  syncFingerprint?: string;
+  excludedUsage?: { timestamp: string; totalTokens: number }[];
   sessionId: string;
   sourceId: string;
   sourceName: string;
