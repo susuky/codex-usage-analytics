@@ -49,7 +49,6 @@ export default function ModelsPage() {
             </table>
           </div>
         </section>
-        <p className="footnote">Thinking 來自每回合的實際設定；舊紀錄缺少標記時顯示「未記錄」，不會自行推測。估價缺少 token 拆分時會顯示部分估算。Reasoning tokens 已包含於 Output，不會重複計價。</p>
         </>}
       </div>
     </div>

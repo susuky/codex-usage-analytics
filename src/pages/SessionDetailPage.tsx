@@ -67,7 +67,7 @@ export function SessionDetailPage() {
       <section className={`${styles.tablePanel} detail-chart-panel`}>
         <h2 className={styles.tableTitle}>Token 累積曲線</h2>
         <p className="footnote">依本機時區顯示；每次用量記錄後累加，沒有活動時維持水平。</p>
-        {untimedTurns > 0 ? <p className="footnote">{formatInteger(untimedTurns)} 回合缺少有效時間，未計入曲線；整段用量與下方明細仍保留。</p> : null}
+        {untimedTurns > 0 ? <p className="footnote">{formatInteger(untimedTurns)} 回合缺少有效時間，未計入曲線。</p> : null}
         {chart.length ? <div className="detail-chart"><ResponsiveContainer width="100%" height="100%">
           <AreaChart data={chart} margin={{ top: 8, right: 20, left: 0, bottom: 0 }}>
             <defs><linearGradient id="mintArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#65dfbf" stopOpacity=".35" /><stop offset="1" stopColor="#65dfbf" stopOpacity="0" /></linearGradient></defs>
@@ -83,7 +83,6 @@ export function SessionDetailPage() {
         </ResponsiveContainer></div> : <p className="footnote">沒有可繪製的時間紀錄。</p>}
       </section>
       <section className={styles.tablePanel}><h2 className={styles.tableTitle}>每回合用量</h2><div className={styles.tableWrap} tabIndex={0} role="region" aria-label="每回合用量明細"><table className={styles.table}><thead><tr><th>回合</th><th>時間</th><th>模型</th><th>模式</th><th>Thinking</th><th>Tokens</th><th>Input（含快取）</th><th>Cached input</th><th>Cache writes</th><th>Output</th><th>Reasoning</th><th>快取率</th><th>API 等值</th></tr></thead><tbody>{session.turns?.map((turn) => <tr key={turn.ordinal}><td>{turn.ordinal}</td><td>{Number.isFinite(Date.parse(turn.timestamp)) ? formatDateTime(turn.timestamp) : "未記錄"}</td><td>{turn.model || "未知模型"}</td><td><span className={turn.serviceTier === "priority" ? "tier-badge fast" : "tier-badge"}>{turn.serviceTier === "priority" ? "快速" : "標準"}</span></td><td><span className="effort-badge">{turn.reasoningEffort && turn.reasoningEffort !== "unknown" ? turn.reasoningEffort : "未記錄"}</span></td><td>{formatInteger(turn.tokens.totalTokens)}</td><td>{formatInteger(turn.tokens.inputTokens)}</td><td>{formatInteger(turn.tokens.cachedInputTokens)}</td><td>{formatInteger(turn.tokens.cacheWriteInputTokens)}</td><td>{formatInteger(turn.tokens.outputTokens)}</td><td>{formatInteger(turn.tokens.reasoningOutputTokens)}</td><td className={styles.accent}>{turn.cacheRate.toFixed(1)}%</td><td>{formatCost(turn.estimateMicrousd)}</td></tr>)}</tbody></table></div></section>
-      <p className="footnote">快速模式回合的 API 等值已套用 Priority 倍率；這不是 Codex 訂閱帳單。</p>
     </div>
   </div>;
 }

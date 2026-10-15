@@ -57,7 +57,6 @@ it("shows the requested model's period usage and keeps mixed-model labels out of
   expect(container.querySelector("tbody")).toHaveTextContent("gpt-5.6-sol");
   expect(screen.getByRole("region", { name: "篩選結果摘要" })).toHaveTextContent("1.2K");
   expect(screen.queryByRole("option", { name: "多個模型" })).not.toBeInTheDocument();
-  expect(screen.getByText(/列表依所選日期與模型計算/)).toBeVisible();
 });
 
 it("ignores a previous model response that arrives after a new filter", async () => {

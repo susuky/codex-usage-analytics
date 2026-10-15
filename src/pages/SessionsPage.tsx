@@ -99,7 +99,7 @@ export function SessionsPage() {
       </section>
       {pending ? <p className="page-loading" role="status">正在載入使用紀錄…</p> : error && !data || queryError ? (
         <div className={styles.empty}>
-          <h2>暫時無法顯示紀錄</h2><p>請重新載入；既有統計不會因此刪除。</p>
+          <h2>暫時無法顯示紀錄</h2><p>請重新載入。</p>
           <button className="secondary-button" onClick={() => queryError ? setModelAttempt(attempt => attempt + 1) : void reload()}>重新載入</button>
           {queryError ? <details className={styles.errorDetails}><summary>查看錯誤詳情</summary><p>{queryError}</p></details> : null}
         </div>
@@ -133,7 +133,6 @@ export function SessionsPage() {
             </div>
           )}
         </section>
-        <p className="footnote">列表依所選日期與模型計算，與總覽使用相同範圍。點進明細可查看整段對話。估算只包含已定價用量，不代表 Codex 訂閱帳單。</p>
       </>}
     </div>
   </div>;

@@ -1,10 +1,9 @@
 import { expect, test } from "@playwright/test";
 
-test("overview explains activity and deduplicated token totals", async ({ page }) => {
+test("overview shows usage totals and the selected date range", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "用量總覽" })).toBeVisible();
   await expect(page.getByText("區間 Tokens", { exact: true })).toBeVisible();
-  await expect(page.getByText(/不會重複計入總量/).first()).toBeVisible();
   await expect(page.getByLabel("日期範圍")).toHaveValue("365");
 });
 

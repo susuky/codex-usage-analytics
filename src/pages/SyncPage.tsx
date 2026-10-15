@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, Clock3, Cloud, Laptop, PauseCircle, RefreshCw, Server, ShieldCheck } from "lucide-react";
+import { AlertCircle, CheckCircle2, Clock3, Cloud, Laptop, PauseCircle, RefreshCw, Server } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { PageHeader } from "../components/PageHeader";
@@ -30,9 +30,8 @@ export default function SyncPage() {
       </article>;
     })}</section>
     {scanning ? <p className="scan-progress" role="status">正在完整掃描本機與遠端來源，完成後會自動更新。</p> : null}
-    <section className="cloud-panel"><div className="cloud-icon"><Cloud size={25} /></div><div><h2>雲端統計同步</h2><p>{!status.enabled ? "已停用雲端同步" : status.configured ? status.signedIn ? `已登入 ${status.email}` : "登入後即可跨裝置同步" : "尚未設定雲端同步，本機與 SSH 掃描仍可使用"}</p></div><button className="secondary-button" disabled={!status.signedIn || !status.enabled || status.syncing || !data} onClick={() => void runCloudSync()}><RefreshCw size={16} />{status.syncing ? "同步中…" : "立即同步"}</button></section>
+    <section className="cloud-panel"><div className="cloud-icon"><Cloud size={25} /></div><div><h2>雲端統計同步</h2><p>{!status.enabled ? "已停用雲端同步" : status.configured ? status.signedIn ? `已登入 ${status.email}` : "登入後即可跨裝置同步" : "尚未設定雲端同步"}</p></div><button className="secondary-button" disabled={!status.signedIn || !status.enabled || status.syncing || !data} onClick={() => void runCloudSync()}><RefreshCw size={16} />{status.syncing ? "同步中…" : "立即同步"}</button></section>
     <p role="status">待同步 {status.pendingRows} 個 Sessions{status.lastSyncedAt ? ` · 上次同步 ${formatDateTime(status.lastSyncedAt)}` : ""}</p>
     <div className="action-row">{message ? <span role="status">{message}</span> : null}{status.lastError ? <span className="state-error" role="alert">{status.lastError}</span> : null}</div>
-    <aside className="privacy-note"><ShieldCheck size={19} /><div><strong>保留統計，不保留對話</strong><p>刪除原始對話不會刪除已匯入的使用紀錄。雲端只同步去識別化統計，不包含對話內容、裝置名稱或完整路徑。</p></div></aside>
   </div></div>;
 }

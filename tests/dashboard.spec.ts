@@ -85,7 +85,6 @@ test("fast mode is tracked per turn and uses an editable Priority multiplier", a
   await expect(page.getByText("快速模式請求", { exact: true })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "模式" })).toBeVisible();
   await expect(page.getByText("快速", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText(/API 等值已套用 Priority 倍率/)).toBeVisible();
 
   await page.goto("/settings");
   await page.getByRole("button", { name: "編輯 gpt-5.6-sol 價格" }).click();
@@ -97,7 +96,6 @@ test("models show per-model Thinking records and official legacy pricing", async
   await expect(page.getByRole("columnheader", { name: "Thinking" })).toBeVisible();
   const solRow = page.getByRole("row").filter({ hasText: "gpt-5.6-sol" });
   await expect(solRow.getByRole("cell").nth(2)).toContainText("max");
-  await expect(page.getByText(/Thinking 來自每回合的實際設定/)).toBeVisible();
 
   await page.goto("/settings");
   await page.getByRole("button", { name: "編輯 gpt-5.5 價格" }).click();
