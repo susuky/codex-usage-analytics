@@ -448,6 +448,114 @@ fn thread_settings_model_switches_match_local_and_python_scanning() {
     assert_eq!(remote.turns.unwrap().iter().map(|turn| (&turn.model, &turn.service_tier)).collect::<Vec<_>>(), turns.iter().map(|turn| (&turn.model, &turn.service_tier)).collect::<Vec<_>>());
 }
 
+fn effort_settings_fixture() -> String {
+    let mut records = vec![json!({"type":"session_meta","timestamp":"2026-10-15T01:00:00Z","payload":{"id":"efforts","cwd":"C:/test"}})];
+    let settings = [
+        None,
+        Some(json!({"type":"turn_context","payload":{"model":"gpt-5.6-sol","collaboration_mode":{"settings":{"reasoning_effort":" high "}}}})),
+        Some(json!({"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"reasoning_effort":"max"}}})),
+        Some(json!({"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"reasoning_effort":null,"collaboration_mode":{"settings":{"reasoning_effort":"ultra"}}}}})),
+        Some(json!({"type":"turn_context","payload":{"effort":" xhigh ","reasoning_effort":"low","collaboration_mode":{"settings":{"reasoning_effort":"medium"}}}})),
+        Some(json!({"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"priority","collaboration_mode":"legacy"}}})),
+        Some(json!({"type":"turn_context","payload":{"reasoning_effort":"medium"}})),
+    ];
+    for (index, setting) in settings.into_iter().enumerate() {
+        if let Some(setting) = setting { records.push(setting); }
+        records.push(json!({"type":"event_msg","timestamp":format!("2026-10-15T01:00:{:02}Z",index+1),"payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"total_tokens":100}}}}));
+    }
+    records.into_iter().map(|record| record.to_string()+"\n").collect()
+}
+
+#[test]
+fn recorded_effort_aliases_and_setting_switches_match_all_scanners() {
+    let root=temp(); std::fs::create_dir(root.join("sessions")).unwrap();
+    let log=effort_settings_fixture(); std::fs::write(root.join("sessions/efforts.jsonl"),&log).unwrap();
+    let local=parse_session(Cursor::new(&log),"local","Local","local").unwrap();
+    let mut results=vec![local];
+    let python=format!("SINCE_ISO = ''\nCODEX_HOME = {}\n{}",serde_json::to_string(&root.to_string_lossy()).unwrap(),include_str!("remote_scan.py"));
+    let mut scripts=vec![("python",python)];
+    if cfg!(windows) { scripts.push(("powershell.exe",format!("$SinceIso = ''\n$CodexHome = '{}'\n{}",root.display(),include_str!("remote_scan.ps1")))); }
+    for (program,script) in scripts {
+        let mut command=std::process::Command::new(program);
+        if program=="python" { command.arg("-"); } else { command.args(crate::ssh::windows_script_command(script.len()).split_whitespace().skip(1)); }
+        let output=bounded_output(&mut command,script.into_bytes(),Duration::from_secs(45)).unwrap();
+        assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
+        results.push(serde_json::from_str::<SessionAggregate>(String::from_utf8_lossy(&output.stdout).lines().next().unwrap()).unwrap());
+    }
+    for parsed in &results {
+        assert_eq!(parsed.tokens.total_tokens,700);
+        assert_eq!(parsed.turns.as_ref().unwrap().iter().map(|turn| turn.reasoning_effort.as_str()).collect::<Vec<_>>(),["unknown","high","max","ultra","xhigh","xhigh","medium"]);
+        assert_eq!(parsed.activity.efforts.iter().map(|item| (&item.name,item.count)).collect::<Vec<_>>(),results[0].activity.efforts.iter().map(|item| (&item.name,item.count)).collect::<Vec<_>>());
+    }
+}
+
+#[test]
+fn historical_effort_repair_preserves_amounts_activity_and_syncs_partial_segments() {
+    let root=temp(); let mut connection=db::open(&root.join("usage.sqlite3")).unwrap();
+    let raw=parse_session(Cursor::new(effort_settings_fixture()),"remote","Remote","ssh").unwrap();
+    let mut legacy=raw.clone();
+    for turn in legacy.turns.as_mut().unwrap() { turn.reasoning_effort="unknown".into(); }
+    db::save_sessions(&mut connection,&[legacy]).unwrap();
+    let before=db::get_session(&connection,"remote","efforts").unwrap();
+    let activity: i64=connection.query_row("SELECT COUNT(*) FROM session_activity",[],|row|row.get(0)).unwrap();
+    let mut prefix=raw.clone(); prefix.turns.as_mut().unwrap().truncate(3); prefix.token_event_count=3; prefix.tokens=TokenBreakdown::default();
+    for turn in prefix.turns.as_ref().unwrap() { prefix.tokens.add_assign(&turn.tokens); }
+    prefix.ended_at=prefix.turns.as_ref().unwrap().last().unwrap().timestamp.clone();
+    assert_eq!(db::save_sessions(&mut connection,&[prefix.clone()]).unwrap(),0);
+    let repaired=db::get_session(&connection,"remote","efforts").unwrap();
+    assert_eq!(repaired.tokens,before.tokens); assert_eq!(repaired.token_event_count,before.token_event_count);
+    assert_eq!(repaired.estimate_microusd,before.estimate_microusd);
+    assert_ne!(repaired.sync_fingerprint,before.sync_fingerprint);
+    assert_eq!(repaired.turns.as_ref().unwrap().iter().map(|turn|turn.reasoning_effort.as_str()).collect::<Vec<_>>(),["unknown","high","max","unknown","unknown","unknown","unknown"]);
+    assert_eq!(connection.query_row("SELECT COUNT(*) FROM session_activity",[],|row|row.get::<_,i64>(0)).unwrap(),activity);
+    db::save_sessions(&mut connection,&[prefix]).unwrap();
+    assert_eq!(db::get_session(&connection,"remote","efforts").unwrap().sync_fingerprint,repaired.sync_fingerprint);
+    let mut missing_again=raw.clone();
+    for turn in missing_again.turns.as_mut().unwrap() { turn.reasoning_effort="unknown".into(); }
+    db::save_sessions(&mut connection,&[missing_again]).unwrap();
+    let saved=db::get_session(&connection,"remote","efforts").unwrap();
+    assert_eq!(saved.turns.unwrap()[1].reasoning_effort,"high");
+    assert_eq!(saved.tokens,before.tokens);
+}
+
+#[test]
+fn effort_parser_upgrade_reparses_checkpointed_logs() {
+    let root=temp(); let path=root.join("usage.sqlite3"); std::fs::create_dir(root.join("sessions")).unwrap();
+    std::fs::write(root.join("sessions/efforts.jsonl"),effort_settings_fixture()).unwrap();
+    let mut connection=db::open(&path).unwrap();
+    crate::scanner::scan_local(&root,&mut connection,false).unwrap();
+    assert!(crate::scanner::scan_local(&root,&mut connection,false).unwrap().sessions.is_empty());
+    connection.execute("DELETE FROM settings WHERE key='data_revision:reasoning-effort-v1'",[]).unwrap(); drop(connection);
+    let mut connection=db::open(&path).unwrap();
+    assert_eq!(crate::scanner::scan_local(&root,&mut connection,false).unwrap().sessions.len(),1);
+    assert!(crate::scanner::scan_local(&root,&mut connection,false).unwrap().sessions.is_empty());
+}
+
+#[test]
+fn historical_effort_repair_ignores_ambiguous_and_incomplete_evidence() {
+    let root=temp(); let mut connection=db::open(&root.join("usage.sqlite3")).unwrap();
+    let mut legacy=parse_session(Cursor::new(effort_settings_fixture()),"remote","Remote","ssh").unwrap();
+    for turn in legacy.turns.as_mut().unwrap() { turn.reasoning_effort="unknown".into(); }
+    db::save_sessions(&mut connection,&[legacy.clone()]).unwrap();
+    let before=db::get_session(&connection,"remote","efforts").unwrap();
+    let mut candidate=legacy.clone(); candidate.turns.as_mut().unwrap().truncate(1);
+    candidate.turns.as_mut().unwrap()[0].reasoning_effort="ultra".into();
+    candidate.token_event_count=1; candidate.tokens=candidate.turns.as_ref().unwrap()[0].tokens.clone();
+    candidate.ended_at=candidate.turns.as_ref().unwrap()[0].timestamp.clone();
+    let mut ambiguous=candidate.clone();
+    let mut duplicate=candidate.turns.as_ref().unwrap()[0].clone(); duplicate.ordinal=2; duplicate.reasoning_effort="low".into();
+    ambiguous.turns.as_mut().unwrap().push(duplicate); ambiguous.token_event_count=2; ambiguous.tokens.add_assign(&candidate.tokens);
+    let mut incomplete=candidate.clone(); incomplete.scan_complete=false;
+    let mut other_model=candidate.clone(); other_model.turns.as_mut().unwrap()[0].model="other-model".into();
+    for observation in [ambiguous,incomplete,other_model] {
+        db::save_sessions(&mut connection,&[observation]).unwrap();
+        let saved=db::get_session(&connection,"remote","efforts").unwrap();
+        assert_eq!(saved.tokens,before.tokens);
+        assert_eq!(saved.sync_fingerprint,before.sync_fingerprint);
+        assert!(saved.turns.unwrap().iter().all(|turn| turn.reasoning_effort=="unknown"));
+    }
+}
+
 #[test]
 fn model_parser_upgrade_reparses_unchanged_logs_without_losing_usage() {
     let root = temp(); let path = root.join("usage.sqlite3");

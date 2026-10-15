@@ -8,6 +8,16 @@ import sys
 UNKNOWN_MODEL = "未知模型"
 
 
+def recorded_effort(value):
+    collaboration = value.get("collaboration_mode")
+    nested = collaboration.get("settings") if isinstance(collaboration, dict) else None
+    nested = nested if isinstance(nested, dict) else {}
+    for effort in (value.get("effort"), value.get("reasoning_effort"), nested.get("reasoning_effort")):
+        if isinstance(effort, str) and effort.strip():
+            return effort.strip()
+    return None
+
+
 def token_values(value):
     value = value if isinstance(value, dict) else {}
     return {
@@ -155,11 +165,16 @@ def parse_file(path):
                 model = payload.get("model") or model
                 if payload.get("cwd"):
                     project = project_name(payload.get("cwd"))
-                if payload.get("effort"):
-                    reasoning_effort = str(payload.get("effort")).strip() or reasoning_effort
+                effort = recorded_effort(payload)
+                if effort:
+                    reasoning_effort = effort
                     add_count(efforts, reasoning_effort)
             elif kind == "event_msg" and payload.get("type") == "thread_settings_applied":
                 settings = payload.get("thread_settings") or {}
+                effort = recorded_effort(settings)
+                if effort:
+                    reasoning_effort = effort
+                    add_count(efforts, effort)
                 next_model = settings.get("model")
                 if isinstance(next_model, str) and next_model.strip():
                     model = next_model

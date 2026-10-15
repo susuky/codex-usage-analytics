@@ -9,6 +9,8 @@ src-tauri/gen/
 # Local runtimes, release artifacts, and test evidence
 /work/
 /outputs/
+# 本機修復紀錄與個人用量明細
+/local-repair-records/
 playwright-report/
 test-results/
 coverage/

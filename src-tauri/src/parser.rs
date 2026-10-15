@@ -53,6 +53,11 @@ fn recover_token_breakdown(
 
 const UNKNOWN_MODEL: &str = "未知模型";
 
+fn recorded_effort(value: &Value) -> Option<&str> {
+    [&value["effort"], &value["reasoning_effort"], &value["collaboration_mode"]["settings"]["reasoning_effort"]]
+        .into_iter().find_map(|value| value.as_str().map(str::trim).filter(|effort| !effort.is_empty()))
+}
+
 fn backfill_leading_model(turns: &mut [TurnUsage], session_model: &str, pricing_rules: &[crate::models::PricingRule]) {
     let first_known_model = turns
         .iter()
@@ -191,12 +196,16 @@ pub fn parse_session<R: BufRead>(reader: R, source_id: &str, source_name: &str, 
                 let payload = &value["payload"];
                 if let Some(next_model) = payload.get("model").and_then(Value::as_str) { model = next_model.to_string(); }
                 if let Some(cwd) = payload.get("cwd").and_then(Value::as_str) { project = project_name(cwd); }
-                if let Some(effort) = payload.get("effort").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()) {
+                if let Some(effort) = recorded_effort(payload) {
                     reasoning_effort = effort.to_string();
                     add_count(&mut efforts, effort);
                 }
             }
             Some("event_msg") if value["payload"].get("type").and_then(Value::as_str) == Some("thread_settings_applied") => {
+                if let Some(effort) = recorded_effort(&value["payload"]["thread_settings"]) {
+                    reasoning_effort = effort.to_string();
+                    add_count(&mut efforts, effort);
+                }
                 if let Some(next_model) = value["payload"]["thread_settings"].get("model").and_then(Value::as_str).filter(|value| !value.trim().is_empty()) {
                     model = next_model.to_string();
                 }

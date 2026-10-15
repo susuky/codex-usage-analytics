@@ -8,6 +8,15 @@ function Get-Value($Object, [string]$Name, $Default = $null) {
     return $property.Value
 }
 
+function Get-RecordedEffort($Value) {
+    $collaboration = Get-Value $Value 'collaboration_mode' $null
+    $nested = Get-Value $collaboration 'settings' $null
+    foreach ($effort in @((Get-Value $Value 'effort'), (Get-Value $Value 'reasoning_effort'), (Get-Value $nested 'reasoning_effort'))) {
+        if ($effort -is [string] -and -not [string]::IsNullOrWhiteSpace($effort)) { return $effort.Trim() }
+    }
+    return ''
+}
+
 function Get-TokenValues($Value) {
     [ordered]@{
         inputTokens = [long](Get-Value $Value 'input_tokens' 0)
@@ -162,10 +171,12 @@ function Convert-Session([string]$Path) {
                 if ($nextModel) { $model = $nextModel }
                 $cwd = [string](Get-Value $payload 'cwd' '')
                 if ($cwd) { $project = Get-ProjectName $cwd }
-                $effort = [string](Get-Value $payload 'effort' '')
+                $effort = Get-RecordedEffort $payload
                 if ($effort) { $reasoningEffort = $effort.Trim(); Add-Count $efforts $reasoningEffort }
             } elseif ($kind -eq 'event_msg' -and (Get-Value $payload 'type' '') -eq 'thread_settings_applied') {
                 $settings = Get-Value $payload 'thread_settings' $null
+                $effort = Get-RecordedEffort $settings
+                if ($effort) { $reasoningEffort = $effort; Add-Count $efforts $effort }
                 $nextModel = [string](Get-Value $settings 'model' '')
                 if (-not [string]::IsNullOrWhiteSpace($nextModel)) { $model = $nextModel }
                 $reportedTier = Get-Value $settings 'service_tier' $null

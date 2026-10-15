@@ -236,6 +236,14 @@ pub fn open(path: &Path) -> Result<Connection, String> {
             INSERT INTO settings VALUES('data_revision:thread-settings-model-v1','1');
             COMMIT;").map_err(|e| e.to_string())?;
     }
+    let effort_revision: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key='data_revision:reasoning-effort-v1')", [], |row| row.get(0)).map_err(|e| e.to_string())?;
+    if !effort_revision {
+        connection.execute_batch("BEGIN IMMEDIATE;
+            DELETE FROM file_checkpoints;
+            UPDATE sources SET last_scanned_at=NULL WHERE kind IN ('local','ssh');
+            INSERT INTO settings VALUES('data_revision:reasoning-effort-v1','1');
+            COMMIT;").map_err(|e| e.to_string())?;
+    }
     crate::import_repair::initialize(&connection)?;
     let has_fingerprint = connection.prepare("PRAGMA table_info(sessions)").map_err(|e| e.to_string())?
         .query_map([], |row| row.get::<_,String>(1)).map_err(|e| e.to_string())?
@@ -287,6 +295,45 @@ pub fn save_cloud_sessions(connection: &mut Connection, sessions: &[SessionAggre
     save_sessions_with_activity(connection, sessions, false)
 }
 
+fn reconcile_recorded_efforts(connection: &Connection, current: &mut SessionAggregate) -> Result<(), String> {
+    let Some(incoming) = current.turns.as_mut() else { return Ok(()) };
+    let missing = |effort: &str| effort.trim().is_empty() || effort.eq_ignore_ascii_case("unknown");
+    if !incoming.iter().any(|turn| missing(&turn.reasoning_effort)) {
+        let has_missing: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM turns WHERE source_id=?1 AND session_id=?2 AND (TRIM(reasoning_effort)='' OR reasoning_effort='unknown'))", params![current.source_id,current.session_id], |row| row.get(0)).map_err(|e| e.to_string())?;
+        if !has_missing { return Ok(()) }
+    }
+    let mut previous = get_session(connection, &current.source_id, &current.session_id)?;
+    let key = |turn: &TurnUsage| chrono::DateTime::parse_from_rfc3339(&turn.timestamp).ok()
+        .map(|timestamp| (timestamp, turn.tokens.total_tokens, turn.model.clone()));
+    let mut old_indices = HashMap::new();
+    let mut new_indices = HashMap::new();
+    for (index, turn) in previous.turns.as_ref().unwrap().iter().enumerate() {
+        if let Some(key) = key(turn) { old_indices.entry(key).and_modify(|index| *index = None).or_insert(Some(index)); }
+    }
+    for (index, turn) in incoming.iter().enumerate() {
+        if let Some(key) = key(turn) { new_indices.entry(key).and_modify(|index| *index = None).or_insert(Some(index)); }
+    }
+    let mut changed = false;
+    for (index, turn) in incoming.iter_mut().enumerate() {
+        let Some(key) = key(turn) else { continue };
+        // Several requests can share a timestamp. Only unambiguous observations
+        // with the same amount and model can supply a missing historical setting.
+        if new_indices.get(&key) != Some(&Some(index)) { continue; }
+        let Some(Some(old_index)) = old_indices.get(&key) else { continue };
+        let saved = &mut previous.turns.as_mut().unwrap()[*old_index];
+        if missing(&turn.reasoning_effort) && !missing(&saved.reasoning_effort) {
+            turn.reasoning_effort = saved.reasoning_effort.clone();
+        } else if missing(&saved.reasoning_effort) && !missing(&turn.reasoning_effort) {
+            saved.reasoning_effort = turn.reasoning_effort.clone();
+            changed = true;
+        }
+    }
+    // Preserve totals/activity and refresh the normal sync fingerprint even when
+    // the older source segment is subsequently retained instead of replacing it.
+    if changed { write_session(connection, &previous, false, true)?; }
+    Ok(())
+}
+
 fn save_sessions_with_activity(connection: &mut Connection, sessions: &[SessionAggregate], replace_activity: bool) -> Result<usize, String> {
     // Streaming SSH jobs write independently. Acquire the write lock before
     // reading prices/history to avoid SQLITE_BUSY_SNAPSHOT on a deferred upgrade.
@@ -302,12 +349,14 @@ fn save_sessions_with_activity(connection: &mut Connection, sessions: &[SessionA
         crate::import_repair::filter_reassigned_turns(&tx, &mut current)?;
         let mut retained_history = false;
         crate::pricing::reprice_sessions(std::slice::from_mut(&mut current), &rules);
-        let Some(incoming_turns) = &current.turns else { retained += 1; continue };
+        if current.turns.is_none() { retained += 1; continue; }
         let existing: Option<(i64, i64, String)> = tx.query_row(
             "SELECT token_event_count,total_tokens,ended_at FROM sessions WHERE source_id=?1 AND session_id=?2",
             params![current.source_id, current.session_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional().map_err(|error| error.to_string())?;
+        if replace_activity && current.scan_complete && existing.is_some() { reconcile_recorded_efforts(&tx, &mut current)?; }
+        let incoming_turns = current.turns.as_ref().unwrap();
         // Preserve history across resumed or archived segments in any order.
         // Conflicting observations and ambiguous cumulative deltas stay protected.
         if let Some((event_count, total_tokens, ended_at)) = existing {
