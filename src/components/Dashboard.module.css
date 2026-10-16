@@ -45,6 +45,8 @@
 .chartPanel { min-width: 0; padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .panelTitle { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 10px; font-size: 16px; font-weight: 580; }
 .legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 14px 0 8px; color: var(--muted); font-size: 12px; }.legend span { display: inline-flex; align-items: center; gap: 6px; }.legend i { width: 8px; height: 8px; display: inline-block; border-radius: 2px; }
+.legend .lineLegend { width: 18px; height: 0; border-top: 2px solid currentColor; border-radius: 0; }
+.chartAxisLabels { display: flex; justify-content: space-between; gap: 12px; margin-top: 12px; color: var(--muted); font-size: 12px; }
 .tablePanel { margin-top: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; }
 .tableTitle { margin: 0; padding: 18px 16px 14px; font-size: 16px; font-weight: 600; }
 .tableWrap { overflow: auto; padding: 0 16px 16px; }
@@ -87,7 +89,7 @@
 .chartHeading { flex-wrap: wrap; gap: 0 16px; }
 .chartControls { margin-top: 12px; }
 .chartControls :global(.segmented) { max-width: 100%; margin-bottom: 0; }
-.chartControls :global(.segmented button) { color: var(--muted); }
+.chartControls :global(.segmented button) { min-height: 44px; color: var(--muted); }
 .chartControls :global(.segmented button.active) { color: var(--mint); }
 .chartCostNote { margin: 14px 0 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .daySummary { display: grid; gap: 8px; margin: 16px 0; padding-bottom: 16px; border-bottom: 1px solid var(--line); }

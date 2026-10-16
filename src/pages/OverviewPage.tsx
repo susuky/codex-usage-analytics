@@ -1,7 +1,7 @@
 import { ArrowUpRight, Bot, CalendarClock, Coins, Gauge, MessagesSquare } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Bar, BarChart, CartesianGrid, LabelList, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, CartesianGrid, ComposedChart, LabelList, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ModelDistribution } from "../components/ModelDistribution";
 import { PageHeader } from "../components/PageHeader";
 import { SessionTable } from "../components/SessionTable";
@@ -12,17 +12,18 @@ import { cacheRate, formatCost, formatDate, formatInteger, formatTokens } from "
 import type { DailyUsage, UsageFilter } from "../types";
 import styles from "../components/Dashboard.module.css";
 
-const chartColors = { uncached: "#408CF4", cached: "#8056D9", cacheWrite: "#F2B75F", output: "#62DDBD", unclassified: "#9AA6A8" };
+const chartColors = { uncached: "#408CF4", cached: "#8056D9", cacheWrite: "#F2B75F", output: "#62DDBD", unclassified: "#9AA6A8", estimate: "#d4bcc8" };
+type ChartView = "tokens" | "cost" | "compare";
 
 function Metric({ icon: Icon, label, value, hint }: { icon: typeof Coins; label: string; value: string; hint?: string }) {
   return <div className={styles.metric}><div className={styles.metricIcon}><Icon size={18} strokeWidth={1.7} aria-hidden="true" /></div><span className={styles.metricLabel}>{label}</span><strong className={styles.metricValue}>{value}</strong>{hint ? <small className={styles.metricHint}>{hint}</small> : null}</div>;
 }
 
-function ChartTooltip({ active, payload, label, view }: { active?: boolean; payload?: Array<{ name: string; value: number; color: string; payload: DailyUsage }>; label?: string; view: "tokens" | "cost" }) {
+function ChartTooltip({ active, payload, label, view }: { active?: boolean; payload?: Array<{ name: string; value: number; color: string; payload: DailyUsage; dataKey?: string | typeof dailyEstimate }>; label?: string; view: ChartView }) {
   if (!active || !payload?.length) return null;
   const day = payload[0].payload;
   return <div className="chart-tooltip"><strong>{label}</strong>
-    {view === "tokens" ? payload.map((item) => <span className="chart-tooltip-part" key={item.name}><i style={{ background: item.color }} />{item.name}<b>{formatInteger(item.value)}</b></span>) : null}
+    {view !== "cost" ? payload.filter(item => item.dataKey !== dailyEstimate).map((item) => <span className="chart-tooltip-part" key={item.name}><i style={{ background: item.color }} />{item.name}<b>{formatInteger(item.value)}</b></span>) : null}
     <span className="chart-tooltip-total">總 Tokens<b>{formatInteger(dailyTokenTotal(day))}</b></span>
     <span className="chart-tooltip-cost">API 等值估算<b>{formatDailyCost(day)}</b></span>
     {day.unpricedTokens > 0 ? <small>{formatTokens(day.unpricedTokens)} Tokens 尚未定價</small> : null}
@@ -32,7 +33,7 @@ function ChartTooltip({ active, payload, label, view }: { active?: boolean; payl
 export function OverviewPage() {
   const { data, filter, loading, scanning, error, reload } = useUsageData();
   const [showDailyTable, setShowDailyTable] = useState(false);
-  const [view, setView] = useState<"tokens" | "cost">("tokens");
+  const [view, setView] = useState<ChartView>("tokens");
   const [selectedDay, setSelectedDay] = useState<{ date: string; filter: UsageFilter } | null>(null);
   const chartData = useMemo(
     () => filter.startDate && filter.endDate
@@ -49,7 +50,7 @@ export function OverviewPage() {
   const rate = cacheRate(data.totals);
   const todayTokens = data.todayTokens;
   const unpricedTokens = data.models.reduce((sum, model) => sum + model.unpricedTokens, 0);
-  const chartTitle = view === "tokens" ? "每日 Token 趨勢" : "每日 API 等值估算";
+  const chartTitle = view === "tokens" ? "每日 Token 趨勢" : view === "cost" ? "每日 API 等值估算" : "每日用量與 API 等值估算";
 
   return (
     <div className={styles.page}>
@@ -65,13 +66,15 @@ export function OverviewPage() {
         <div className={styles.charts}>
           <section className={styles.chartPanel}>
             <div className={`${styles.sectionHeading} ${styles.chartHeading}`}><h2 className={styles.panelTitle}>{chartTitle}</h2><Link to="/trends" className={styles.textLink}>查看趨勢<ArrowUpRight size={14} /></Link></div>
-            <div className={styles.chartControls}><div className="segmented" role="group" aria-label="每日圖表顯示方式"><button aria-pressed={view === "tokens"} className={view === "tokens" ? "active" : ""} onClick={() => setView("tokens")}>Tokens</button><button aria-pressed={view === "cost"} className={view === "cost" ? "active" : ""} onClick={() => setView("cost")}>API 等值估算</button></div></div>
-            {view === "tokens" ? <div className={styles.legend}><span><i style={{ background: chartColors.uncached }} />未快取輸入</span><span><i style={{ background: chartColors.cached }} />Cached input</span><span><i style={{ background: chartColors.cacheWrite }} />Cache writes</span><span><i style={{ background: chartColors.output }} />輸出</span><span><i style={{ background: chartColors.unclassified }} />未分類</span></div> : <p className={styles.chartCostNote}>單位：美元</p>}
+            <div className={styles.chartControls}><div className="segmented" role="group" aria-label="每日圖表顯示方式"><button aria-pressed={view === "tokens"} className={view === "tokens" ? "active" : ""} onClick={() => setView("tokens")}>Tokens</button><button aria-pressed={view === "cost"} className={view === "cost" ? "active" : ""} onClick={() => setView("cost")}>API 等值估算</button><button aria-pressed={view === "compare"} className={view === "compare" ? "active" : ""} onClick={() => setView("compare")}>比較</button></div></div>
+            {view !== "cost" ? <div className={styles.legend}><span><i style={{ background: chartColors.uncached }} />未快取輸入</span><span><i style={{ background: chartColors.cached }} />Cached input</span><span><i style={{ background: chartColors.cacheWrite }} />Cache writes</span><span><i style={{ background: chartColors.output }} />輸出</span><span><i style={{ background: chartColors.unclassified }} />未分類</span>{view === "compare" ? <span><i className={styles.lineLegend} style={{ color: chartColors.estimate, opacity: 0.6 }} />API 等值估算</span> : null}</div> : <p className={styles.chartCostNote}>單位：美元</p>}
+            {view === "compare" ? <div className={styles.chartAxisLabels}><span>Tokens</span><span>API 等值估算（US$）</span></div> : null}
             <div className="main-chart" aria-label={`${chartTitle}；點選日期可查看當天的估算與模型分布，也可使用模型分布日期選單。`}>
-              <ResponsiveContainer width="100%" height="100%"><BarChart data={chartData} barCategoryGap="24%" maxBarSize={56} margin={{ top: 24, right: 8, left: 0, bottom: 0 }} onClick={({ activeLabel }) => { if (typeof activeLabel === "string" && chartData.some(day => day.date === activeLabel)) selectDate(activeLabel); }}>
+              <ResponsiveContainer width="100%" height="100%"><ComposedChart data={chartData} barCategoryGap="24%" maxBarSize={56} margin={{ top: 24, right: 8, left: 0, bottom: 0 }} onClick={({ activeLabel }) => { if (typeof activeLabel === "string" && chartData.some(day => day.date === activeLabel)) selectDate(activeLabel); }}>
                 <CartesianGrid stroke="#2b343a" vertical={false} strokeDasharray="2 2" />
                 <XAxis dataKey="date" tickFormatter={formatDate} tick={{ fill: "#9aa7ad", fontSize: 12 }} axisLine={{ stroke: "#354047" }} tickLine={false} />
                 <YAxis width={view === "cost" ? 88 : 60} tickFormatter={view === "cost" ? formatCost : formatTokens} tick={{ fill: "#9aa7ad", fontSize: 12 }} axisLine={false} tickLine={false} />
+                {view === "compare" ? <YAxis yAxisId="cost" orientation="right" width={88} domain={[0, "auto"]} tickFormatter={formatCost} tick={{ fill: chartColors.estimate, fontSize: 12 }} axisLine={false} tickLine={false} /> : null}
                 {selectedDate ? <ReferenceLine x={selectedDate} stroke={chartColors.output} strokeDasharray="4 4" /> : null}
                 <Tooltip content={<ChartTooltip view={view} />} filterNull={false} cursor={{ fill: "rgba(255,255,255,.035)" }} />
                 {view === "cost" ? <Bar name="API 等值估算" dataKey={dailyEstimate} fill={chartColors.output} radius={[2,2,0,0]} isAnimationActive={false}>
@@ -83,7 +86,8 @@ export function OverviewPage() {
                   <Bar name="輸出" dataKey="output" stackId="a" fill={chartColors.output} minPointSize={barMinimum("output")} isAnimationActive={false} />
                   <Bar name="未分類" dataKey="unclassified" stackId="a" fill={chartColors.unclassified} minPointSize={barMinimum("unclassified")} isAnimationActive={false} radius={[2,2,0,0]} />
                 </>}
-              </BarChart></ResponsiveContainer>
+                {view === "compare" ? <Line yAxisId="cost" name="API 等值估算" dataKey={dailyEstimate} type="linear" stroke={chartColors.estimate} strokeWidth={2} opacity={0.6} dot={{ r: 2 }} activeDot={{ r: 4, opacity: 1 }} connectNulls={false} isAnimationActive={false} /> : null}
+              </ComposedChart></ResponsiveContainer>
             </div>
             <p className={styles.sectionHint}>點選日期，查看當天的估算與模型分布。</p>
           </section>
