@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import type { SessionAggregate } from "../types";
 import { demoSessions } from "./mockData";
-import { getProjectSummaries, getProjectSummary, projectPath } from "./projectView";
+import { getProjectSummaries, getProjectSummary, projectPath, readProjectSort, sortProjects, type ProjectSortKey } from "./projectView";
 
 const session = (overrides: Partial<SessionAggregate> = {}): SessionAggregate => ({
   ...demoSessions[0],
@@ -64,4 +64,57 @@ it("compares activity timestamps by their instant and encodes complete project p
   const path = projectPath(project);
   expect(path).toBe(`/projects/${encodeURIComponent(project)}`);
   expect(decodeURIComponent(path.slice("/projects/".length))).toBe(project);
+});
+
+it("reads project sort direction with column defaults and validates URL values", () => {
+  expect(readProjectSort(new URLSearchParams())).toEqual({ key: "tokens", asc: false });
+  for (const key of ["name", "sessions", "source", "latest", "tokens", "cost"] as const) {
+    const asc = key === "name" || key === "source";
+    expect(readProjectSort(new URLSearchParams(`sort=${key}`))).toEqual({ key, asc });
+    expect(readProjectSort(new URLSearchParams(`sort=${key}&direction=invalid`))).toEqual({ key, asc });
+    expect(readProjectSort(new URLSearchParams(`sort=${key}&direction=asc`))).toEqual({ key, asc: true });
+    expect(readProjectSort(new URLSearchParams(`sort=${key}&direction=desc`))).toEqual({ key, asc: false });
+  }
+  expect(readProjectSort(new URLSearchParams("sort=invalid&direction=invalid"))).toEqual({ key: "tokens", asc: false });
+  expect(readProjectSort(new URLSearchParams("sort=invalid&direction=asc"))).toEqual({ key: "tokens", asc: true });
+});
+
+it("sorts all six project columns in both directions without changing rows", () => {
+  const base = getProjectSummaries([session()])[0];
+  const rows = [
+    { ...base, project: "Gamma", sessionCount: 2, tokens: { ...base.tokens, totalTokens: 30 }, sources: [{ id: "a", name: "alpha", kind: "ssh" as const }, { id: "z", name: "zulu", kind: "ssh" as const }], endedAt: "2026-10-16T02:00:00Z", estimateMicrousd: 1 },
+    { ...base, project: "Beta", sessionCount: 1, tokens: { ...base.tokens, totalTokens: 10 }, sources: [{ id: "a", name: "alpha", kind: "ssh" as const }, { id: "z", name: "zeta", kind: "ssh" as const }], endedAt: "2026-10-16T09:00:00+08:00", estimateMicrousd: 2 },
+    { ...base, project: "Alpha", sessionCount: 3, tokens: { ...base.tokens, totalTokens: 20 }, sources: [{ id: "z", name: "zeta", kind: "ssh" as const }], endedAt: "2026-10-16T01:00:00Z", estimateMicrousd: 0 },
+  ];
+  const original = structuredClone(rows);
+  const cases: Array<[ProjectSortKey, string[], string[]]> = [
+    ["name", ["Alpha", "Beta", "Gamma"], ["Gamma", "Beta", "Alpha"]],
+    ["sessions", ["Beta", "Gamma", "Alpha"], ["Alpha", "Gamma", "Beta"]],
+    ["source", ["Beta", "Gamma", "Alpha"], ["Alpha", "Gamma", "Beta"]],
+    ["latest", ["Alpha", "Beta", "Gamma"], ["Gamma", "Alpha", "Beta"]],
+    ["tokens", ["Beta", "Alpha", "Gamma"], ["Gamma", "Alpha", "Beta"]],
+    ["cost", ["Alpha", "Gamma", "Beta"], ["Beta", "Gamma", "Alpha"]],
+  ];
+  for (const [key, ascending, descending] of cases) {
+    for (const [asc, expected] of [[true, ascending], [false, descending]] as const) {
+      const sorted = sortProjects(rows, { key, asc });
+      expect(sorted.map(row => row.project)).toEqual(expected);
+      expect(sorted).not.toBe(rows);
+    }
+  }
+  expect(rows).toEqual(original);
+});
+
+it("keeps missing costs and invalid activity dates last in either direction", () => {
+  const base = getProjectSummaries([session()])[0];
+  const rows = [
+    { ...base, project: "D", estimateMicrousd: null, endedAt: "invalid" },
+    { ...base, project: "C", estimateMicrousd: null, endedAt: "" },
+    { ...base, project: "B", estimateMicrousd: 3, endedAt: "2026-10-16T01:00:00Z" },
+    { ...base, project: "A", estimateMicrousd: 0, endedAt: "2026-10-16T10:00:00+08:00" },
+  ];
+  expect(sortProjects(rows, { key: "cost", asc: true }).map(row => row.project)).toEqual(["A", "B", "C", "D"]);
+  expect(sortProjects(rows, { key: "cost", asc: false }).map(row => row.project)).toEqual(["B", "A", "C", "D"]);
+  expect(sortProjects(rows, { key: "latest", asc: true }).map(row => row.project)).toEqual(["B", "A", "C", "D"]);
+  expect(sortProjects(rows, { key: "latest", asc: false }).map(row => row.project)).toEqual(["A", "B", "C", "D"]);
 });

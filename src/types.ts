@@ -20,6 +20,14 @@ export interface TurnUsage {
   cacheRate: number;
 }
 
+export interface ProjectTimelinePoint {
+  timestamp: number;
+  total: number;
+  input: number;
+  output: number;
+  reasoning: number;
+}
+
 export interface SessionAggregate {
   aggregationVersion?: number;
   syncFingerprint?: string;
@@ -105,6 +113,11 @@ export interface OverviewData {
   estimateMicrousd: number;
   unpricedSessions: number;
   activity: ActivityOverview;
+}
+
+export interface ProjectDetailData {
+  overview: OverviewData;
+  timeline: ProjectTimelinePoint[] | null;
 }
 
 export interface UsageFilter {

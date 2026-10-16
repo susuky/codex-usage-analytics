@@ -64,6 +64,23 @@ pub struct PeriodTurnUsage {
     pub estimate_microusd: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTimelinePoint {
+    pub timestamp: i64,
+    pub total: i64,
+    pub input: i64,
+    pub output: i64,
+    pub reasoning: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDetailData {
+    pub overview: OverviewData,
+    pub timeline: Vec<ProjectTimelinePoint>,
+}
+
 pub fn default_service_tier() -> String { "default".into() }
 
 pub fn default_reasoning_effort() -> String { "unknown".into() }

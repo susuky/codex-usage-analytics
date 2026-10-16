@@ -2,13 +2,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { buildDemoOverview, buildDemoSources, demoSessions } from "./mockData";
 import { emptyDailyUsage, localDateKey } from "./daily";
 import { applyNonBillablePricing, isNonBillableModel, nonBillablePricingRule } from "./pricing";
-import type { AppSettings, OverviewData, PricingRule, PricingStatus, PricingUpdateResult, ScanResult, SessionAggregate, SshSourceConfig, StoredSyncState, UsageFilter, UsageSource } from "../types";
+import type { AppSettings, OverviewData, PricingRule, PricingStatus, PricingUpdateResult, ProjectDetailData, ScanResult, SessionAggregate, SshSourceConfig, StoredSyncState, UsageFilter, UsageSource } from "../types";
 
 const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 export async function getOverview(filter: UsageFilter): Promise<OverviewData> {
   if (!isTauri()) return filterDemo(buildDemoOverview((await getSettings()).sshSources), filter);
   return invoke<OverviewData>("get_overview", { filter });
+}
+
+export async function getProjectDetail(filter: UsageFilter): Promise<ProjectDetailData> {
+  if (!isTauri()) return { overview: await getOverview(filter), timeline: null };
+  return invoke<ProjectDetailData>("get_project_detail", { filter });
 }
 
 export async function listSessions(filter: UsageFilter): Promise<SessionAggregate[]> {

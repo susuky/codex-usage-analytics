@@ -143,7 +143,7 @@
 .pagination button { display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid #41515a; border-radius: 7px; color: var(--text); background: var(--surface); cursor: pointer; }
 .pagination button:hover:not(:disabled) { color: var(--mint); background: var(--surface-raised); }
 .pagination button:disabled { opacity: .4; cursor: not-allowed; }
-.projectFilters { grid-template-columns: minmax(220px, 1.6fr) repeat(2, minmax(130px, 1fr)); margin-bottom: 20px; }
+.projectFilters { grid-template-columns: minmax(220px, 1.6fr) minmax(130px, 1fr); margin-bottom: 20px; }
 .projectHeading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; margin: 8px 0 20px; }
 .projectHeading h2 { min-width: 0; max-width: 100%; margin: 0; overflow-wrap: anywhere; font-size: 24px; }
 .projectHeading label { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; color: var(--muted); font-size: 14px; }
@@ -164,7 +164,9 @@
   .projectHeading select { flex: 1; min-width: 0; font-size: 16px; }
   .projectMetadata:global(.metadata-strip) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .projectTable, .projectTable thead, .projectTable tbody { display: block; min-width: 0; }
-  .projectTable thead { display: none; }
+  .projectTable thead tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  .projectTable thead th { position: static; height: auto; padding: 0; border: 0; text-align: left; background: transparent; }
+  .projectTable .sortButton { width: 100%; font-size: 13px; }
   .projectTable tbody tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--line); }
   .projectTable tbody tr:last-child { border: 0; }
   .projectTable td { min-width: 0; height: auto; padding: 0; border: 0; white-space: normal; overflow-wrap: anywhere; }

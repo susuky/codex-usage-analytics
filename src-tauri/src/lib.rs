@@ -16,7 +16,7 @@ use chrono::{DateTime, Local};
 use chrono::Utc;
 use keyring::Entry;
 use tauri::{Manager, State};
-use models::{AppSettings, DailyUsage, ModelUsage, OverviewData, ScanResult, SessionAggregate, TokenBreakdown, UsageFilter, UsageSource};
+use models::{AppSettings, DailyUsage, ModelUsage, OverviewData, ProjectDetailData, ScanResult, SessionAggregate, TokenBreakdown, UsageFilter, UsageSource};
 use pricing::is_fast_tier;
 
 struct AppState { db_path: PathBuf }
@@ -163,15 +163,34 @@ async fn get_overview(state: State<'_, AppState>, filter: UsageFilter) -> Result
     run_blocking(move || overview_for_path(&path, filter)).await
 }
 
+#[tauri::command]
+async fn get_project_detail(state: State<'_, AppState>, filter: UsageFilter) -> Result<ProjectDetailData, String> {
+    let path = state.db_path.clone();
+    run_blocking(move || project_detail_for_path(&path, filter)).await
+}
+
 fn overview_for_path(path: &std::path::Path, filter: UsageFilter) -> Result<OverviewData, String> {
     let mut database = db::open(path)?;
     // A consistent read snapshot while the streaming scanners commit sessions.
     let connection = database.transaction().map_err(|error| error.to_string())?;
+    overview_for_connection(&connection, &filter)
+}
+
+fn project_detail_for_path(path: &std::path::Path, filter: UsageFilter) -> Result<ProjectDetailData, String> {
+    let mut database = db::open(path)?;
+    let connection = database.transaction().map_err(|error| error.to_string())?;
+    Ok(ProjectDetailData {
+        overview: overview_for_connection(&connection, &filter)?,
+        timeline: db::project_timeline(&connection, &filter)?,
+    })
+}
+
+fn overview_for_connection(connection: &rusqlite::Connection, filter: &UsageFilter) -> Result<OverviewData, String> {
     let today_filter = UsageFilter { days: 1, start_date: None, end_date: None, ..filter.clone() };
     let mut today_tokens = 0;
-    db::visit_period_turns(&connection, &today_filter, |turn| today_tokens += turn.tokens.total_tokens)?;
-    let sessions = db::list_sessions(&connection, &filter)?;
-    let sources = db::list_sources(&connection)?;
+    db::visit_period_turns(connection, &today_filter, |turn| today_tokens += turn.tokens.total_tokens)?;
+    let sessions = db::list_sessions(connection, filter)?;
+    let sources = db::list_sources(connection)?;
     let mut totals = TokenBreakdown::default();
     let mut estimate_total = 0;
     let mut unpriced_session_keys = HashSet::new();
@@ -180,7 +199,7 @@ fn overview_for_path(path: &std::path::Path, filter: UsageFilter) -> Result<Over
     let mut daily_sessions: HashMap<String, HashSet<(String, String)>> = HashMap::new();
     let mut model_sessions: HashMap<String, HashSet<(String, String)>> = HashMap::new();
     // Fold one row at a time rather than retaining millions of turn objects.
-    db::visit_period_turns(&connection, &filter, |turn| {
+    db::visit_period_turns(connection, filter, |turn| {
         totals.add_assign(&turn.tokens);
         let session_key = (turn.source_id.clone(), turn.session_id.clone());
         if let Some(cost) = turn.estimate_microusd { estimate_total += cost; } else { unpriced_session_keys.insert(session_key.clone()); }
@@ -237,7 +256,7 @@ fn overview_for_path(path: &std::path::Path, filter: UsageFilter) -> Result<Over
         }
     }
     let activity_tokens = totals.total_tokens;
-    let activity = db::get_activity(&connection, &filter)?;
+    let activity = db::get_activity(connection, filter)?;
     Ok(OverviewData { today_tokens, sessions, daily: daily_map.into_values().collect(), models: model_map.into_values().collect(), sources, totals, activity_tokens, estimate_microusd: estimate_total, unpriced_sessions: unpriced_session_keys.len() as i64, activity })
 }
 
@@ -356,7 +375,7 @@ pub fn run() {
             { use tauri_plugin_deep_link::DeepLinkExt; app.deep_link().register_all()?; }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![scan_sources, test_ssh_source, list_sessions, list_sync_sessions, get_session_detail, get_overview, get_settings, save_settings, get_pricing_status, refresh_pricing, open_pricing_docs, secure_get, secure_set, secure_remove, get_sync_state, save_sync_state, merge_cloud_sessions])
+        .invoke_handler(tauri::generate_handler![scan_sources, test_ssh_source, list_sessions, list_sync_sessions, get_session_detail, get_overview, get_project_detail, get_settings, save_settings, get_pricing_status, refresh_pricing, open_pricing_docs, secure_get, secure_set, secure_remove, get_sync_state, save_sync_state, merge_cloud_sessions])
         .run(tauri::generate_context!())
         .expect("error while running Codex usage analytics");
 }

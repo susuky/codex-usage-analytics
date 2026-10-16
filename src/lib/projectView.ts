@@ -12,6 +12,39 @@ export interface ProjectSummary {
   endedAt: string;
 }
 
+export type ProjectSortKey = "name" | "sessions" | "source" | "latest" | "tokens" | "cost";
+export interface ProjectSort { key: ProjectSortKey; asc: boolean }
+
+export function readProjectSort(params: URLSearchParams): ProjectSort {
+  const requested = params.get("sort") ?? "tokens";
+  const key = (["name", "sessions", "source", "latest", "tokens", "cost"].includes(requested) ? requested : "tokens") as ProjectSortKey;
+  const direction = params.get("direction");
+  return { key, asc: direction === "asc" ? true : direction === "desc" ? false : key === "name" || key === "source" };
+}
+
+export function sortProjects(rows: ProjectSummary[], sort: ProjectSort): ProjectSummary[] {
+  const value = (row: ProjectSummary) => {
+    switch (sort.key) {
+      case "name": return row.project;
+      case "sessions": return row.sessionCount;
+      case "source": return row.sources.map(source => source.name).join("、");
+      case "latest": {
+        const timestamp = Date.parse(row.endedAt);
+        return Number.isFinite(timestamp) ? timestamp : null;
+      }
+      case "cost": return row.estimateMicrousd;
+      default: return row.tokens.totalTokens;
+    }
+  };
+  return [...rows].sort((a, b) => {
+    const left = value(a), right = value(b);
+    const tie = a.project.localeCompare(b.project);
+    if (left === null || right === null) return Number(left === null) - Number(right === null) || tie;
+    const comparison = typeof left === "number" ? left - Number(right) : left.localeCompare(String(right));
+    return comparison * (sort.asc ? 1 : -1) || tie;
+  });
+}
+
 export const projectPath = (project: string) => `/projects/${encodeURIComponent(project)}`;
 
 export function getProjectSummaries(sessions: SessionAggregate[]): ProjectSummary[] {

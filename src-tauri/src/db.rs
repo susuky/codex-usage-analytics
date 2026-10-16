@@ -3,7 +3,7 @@ use chrono::{Duration, Local, NaiveDate, SecondsFormat, TimeZone, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashMap;
 use sha2::{Digest, Sha256};
-use crate::{models::{default_pricing_rules, ActivityOverview, AppSettings, NamedCount, PeriodTurnUsage, PricingRule, SessionActivity, SessionAggregate, SshSourceConfig, TokenBreakdown, TurnUsage, UsageFilter, UsageSource}, pricing::{estimate_with_rules_for_tier, is_fast_tier}};
+use crate::{models::{default_pricing_rules, ActivityOverview, AppSettings, NamedCount, PeriodTurnUsage, PricingRule, ProjectTimelinePoint, SessionActivity, SessionAggregate, SshSourceConfig, TokenBreakdown, TurnUsage, UsageFilter, UsageSource}, pricing::{estimate_with_rules_for_tier, is_fast_tier}};
 
 const MODEL_ATTRIBUTION_REVISION_KEY: &str = "data_revision:model-attribution-v2";
 const PRICING_REVISION_KEY: &str = "data_revision:official-pricing-v2";
@@ -808,6 +808,33 @@ pub fn visit_period_turns(connection: &Connection, filter: &UsageFilter, mut vis
     })).map_err(|error| error.to_string())?;
     for row in rows { visit(row.map_err(|error| error.to_string())?); }
     Ok(())
+}
+
+pub fn project_timeline(connection: &Connection, filter: &UsageFilter) -> Result<Vec<ProjectTimelinePoint>, String> {
+    let mut points = Vec::new();
+    let mut invalid_timestamp = false;
+    visit_period_turns(connection, filter, |turn| {
+        match chrono::DateTime::parse_from_rfc3339(&turn.timestamp) {
+            Ok(timestamp) => points.push(ProjectTimelinePoint {
+                timestamp: timestamp.timestamp_millis(), total: turn.tokens.total_tokens,
+                input: turn.tokens.input_tokens, output: turn.tokens.output_tokens,
+                reasoning: turn.tokens.reasoning_output_tokens,
+            }),
+            Err(_) => invalid_timestamp = true,
+        }
+    })?;
+    if invalid_timestamp { return Err("部分用量紀錄缺少有效時間，無法繪製累積曲線".into()); }
+    points.sort_by_key(|point| point.timestamp);
+    let (mut total, mut input, mut output, mut reasoning) = (0, 0, 0, 0);
+    for point in &mut points {
+        total += point.total; input += point.input; output += point.output; reasoning += point.reasoning;
+        point.total = total; point.input = input; point.output = output; point.reasoning = reasoning;
+    }
+    // 同一毫秒保留所有請求累加後的值。
+    points.reverse();
+    points.dedup_by_key(|point| point.timestamp);
+    points.reverse();
+    Ok(points)
 }
 
 #[cfg(test)]

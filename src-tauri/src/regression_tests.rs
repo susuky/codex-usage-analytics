@@ -297,6 +297,97 @@ fn daily_session_tokens_and_costs_match_overview_across_dates_models_and_sources
 }
 
 #[test]
+fn project_timeline_combines_each_usage_across_sessions_and_matches_overview_filters() {
+    use chrono::{Local, NaiveDate, SecondsFormat, TimeZone, Utc};
+    let root = temp(); let path = root.join("usage.sqlite3");
+    let mut connection = db::open(&path).unwrap();
+    let midnight = Local.from_local_datetime(&NaiveDate::from_ymd_opt(2026, 9, 6).unwrap().and_hms_opt(0, 0, 0).unwrap()).earliest().unwrap();
+    let timestamp = |seconds| (midnight + chrono::Duration::seconds(seconds)).with_timezone(&Utc).to_rfc3339_opts(SecondsFormat::Millis, true);
+    let session = |source: &str, id: &str, project: &str, records: &[(i64, &str, i64, i64, i64, i64)]| {
+        let mut lines = vec![json!({"type":"session_meta","timestamp":timestamp(records[0].0),"payload":{"id":id,"cwd":format!("C:/{project}")}})];
+        for &(second, model, input, output, reasoning, total) in records {
+            lines.push(json!({"type":"turn_context","payload":{"model":model}}));
+            lines.push(json!({"type":"event_msg","timestamp":timestamp(second),"payload":{"type":"token_count","info":{"last_token_usage":{
+                "input_tokens":input,"cached_input_tokens":input/2,"cache_write_input_tokens":input/10,
+                "output_tokens":output,"reasoning_output_tokens":reasoning,"total_tokens":total
+            }}}}));
+        }
+        parse_session(Cursor::new(lines.into_iter().map(|line| line.to_string()+"\n").collect::<String>()), source, source, if source == "local" { "local" } else { "ssh" }).unwrap()
+    };
+    db::save_sessions(&mut connection, &[
+        session("local", "first", "timeline-project", &[(-1,"gpt-5.6-sol",1000,100,30,1100),(3600,"gpt-5.6-sol",100,10,3,115),(10800,"gpt-5.6-luna",200,20,7,220),(86400,"gpt-5.6-sol",900,90,50,990)]),
+        session("ssh-test", "second", "timeline-project", &[(7200,"gpt-5.6-sol",300,30,11,330),(10800,"gpt-5.6-sol",400,40,17,440)]),
+        session("local", "third", "timeline-project", &[(7200,"gpt-5.6-sol",50,5,2,55)]),
+        session("local", "other", "other-project", &[(5400,"gpt-5.6-sol",5000,500,50,5500)]),
+    ]).unwrap();
+    let day = UsageFilter { days: 1, start_date: Some("2026-09-06".into()), end_date: Some("2026-09-06".into()), source_id: None, model: None, project: Some("timeline-project".into()) };
+    for (filter, expected_total, expected_points) in [
+        (day.clone(), 1160, 3),
+        (UsageFilter { source_id: Some("local".into()), ..day.clone() }, 390, 3),
+        (UsageFilter { model: Some("gpt-5.6-sol".into()), ..day.clone() }, 940, 3),
+        (UsageFilter { source_id: Some("local".into()), model: Some("gpt-5.6-sol".into()), ..day.clone() }, 170, 2),
+        (UsageFilter { project: Some("other-project".into()), ..day.clone() }, 5500, 1),
+        (UsageFilter { project: Some("absent".into()), ..day.clone() }, 0, 0),
+        (UsageFilter { start_date: Some("2026-09-05".into()), end_date: Some("2026-09-07".into()), ..day.clone() }, 3250, 5),
+    ] {
+        let points = db::project_timeline(&connection, &filter).unwrap();
+        let detail = crate::project_detail_for_path(&path, filter).unwrap();
+        assert_eq!(points, detail.timeline);
+        let overview = detail.overview;
+        assert_eq!(points.len(), expected_points);
+        assert!(points.windows(2).all(|pair| pair[0].timestamp <= pair[1].timestamp));
+        assert_eq!(points.last().map_or(0, |point| point.total), expected_total);
+        let totals = overview.totals;
+        assert_eq!(points.last().map(|point| (point.total, point.input, point.output, point.reasoning)).unwrap_or_default(),
+            (totals.total_tokens, totals.input_tokens, totals.output_tokens, totals.reasoning_output_tokens));
+    }
+    let points = db::project_timeline(&connection, &day).unwrap();
+    let millis = |seconds| chrono::DateTime::parse_from_rfc3339(&timestamp(seconds)).unwrap().timestamp_millis();
+    assert_eq!(points.iter().map(|point| point.timestamp).collect::<Vec<_>>(), vec![millis(3600),millis(7200),millis(10800)]);
+    assert_eq!(points.iter().map(|point| point.total).collect::<Vec<_>>(), vec![115,500,1160]);
+    assert_eq!((points.last().unwrap().total, points.last().unwrap().input, points.last().unwrap().output, points.last().unwrap().reasoning), (1160,1050,105,40));
+}
+
+#[test]
+fn project_timeline_orders_actual_instants_and_reports_invalid_usage_times() {
+    let root = temp(); let mut connection = db::open(&root.join("usage.sqlite3")).unwrap();
+    let mut parsed = parse_session(Cursor::new(fixture()), "local", "Local", "local").unwrap();
+    let turns = parsed.turns.as_mut().unwrap();
+    turns.truncate(2);
+    turns[0].timestamp = "2026-09-06T02:00:00Z".into();
+    turns[1].timestamp = "2026-09-06T09:00:00+08:00".into();
+    db::save_sessions(&mut connection, &[parsed]).unwrap();
+    let filter = UsageFilter { days: 36500, start_date: None, end_date: None, source_id: None, model: None, project: Some("test".into()) };
+    let points = db::project_timeline(&connection, &filter).unwrap();
+    assert_eq!(points.iter().map(|point| point.timestamp).collect::<Vec<_>>(), vec![1788656400000,1788660000000]);
+    assert_eq!(points.iter().map(|point| point.total).collect::<Vec<_>>(), vec![220,330]);
+    connection.execute("UPDATE turns SET timestamp='not-a-timestamp' WHERE ordinal=1", []).unwrap();
+    assert!(db::project_timeline(&connection, &filter).unwrap_err().contains("有效時間"));
+}
+
+#[test]
+fn project_detail_keeps_overview_and_timeline_in_the_same_read_snapshot() {
+    let root = temp(); let path = root.join("usage.sqlite3");
+    let mut reader = db::open(&path).unwrap();
+    let mut first = parse_session(Cursor::new(fixture()), "local", "Local", "local").unwrap();
+    db::save_sessions(&mut reader, &[first.clone()]).unwrap();
+    let mut writer = db::open(&path).unwrap();
+    let filter = UsageFilter { days: 36500, start_date: None, end_date: None, source_id: None, model: None, project: Some("test".into()) };
+    let transaction = reader.transaction().unwrap();
+    let overview = crate::overview_for_connection(&transaction, &filter).unwrap();
+    first.session_id = "arrived-during-read".into();
+    db::save_sessions(&mut writer, &[first]).unwrap();
+    let timeline = db::project_timeline(&transaction, &filter).unwrap();
+    assert_eq!(overview.totals.total_tokens, 485);
+    assert_eq!(timeline.last().unwrap().total, overview.totals.total_tokens);
+    assert_eq!(crate::overview_for_connection(&writer, &filter).unwrap().totals.total_tokens, 970);
+    drop(transaction);
+    let detail = crate::project_detail_for_path(&path, filter).unwrap();
+    assert_eq!(detail.overview.totals.total_tokens, 970);
+    assert_eq!(detail.timeline.last().unwrap().total, 970);
+}
+
+#[test]
 fn resets_and_missing_last_reconcile_everywhere_and_remain_idempotent() {
     let root=temp(); let mut connection=db::open(&root.join("usage.sqlite3")).unwrap();
     let parsed=parse_session(Cursor::new(fixture()),"local","Local","local").unwrap();
