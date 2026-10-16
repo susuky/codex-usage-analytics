@@ -5,6 +5,7 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YA
 import { getSessionDetail } from "../lib/api";
 import { cacheRate, formatCost, formatDateTime, formatInteger, formatSessionCost, formatTokens, shortId } from "../lib/format";
 import { buildSessionTimeline, sessionTimeAxisFormat, sessionTimestampFormat } from "../lib/sessionDetail";
+import { projectPath } from "../lib/projectView";
 import type { SessionAggregate } from "../types";
 import styles from "../components/Dashboard.module.css";
 
@@ -25,7 +26,7 @@ export function SessionDetailPage() {
   const { sourceId = "", sessionId = "" } = useParams();
   const location = useLocation();
   const requestedReturn = location.state?.returnTo;
-  const returnTo = typeof requestedReturn === "string" && (requestedReturn === "/sessions" || requestedReturn.startsWith("/sessions?")) ? requestedReturn : "/sessions";
+  const returnTo = typeof requestedReturn === "string" && (requestedReturn === "/sessions" || requestedReturn.startsWith("/sessions?") || requestedReturn.startsWith("/projects/")) ? requestedReturn : "/sessions";
   const [session, setSession] = useState<SessionAggregate | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -36,7 +37,7 @@ export function SessionDetailPage() {
   }, [sourceId, sessionId]);
   const chart = useMemo(() => buildSessionTimeline(session?.turns ?? []), [session?.turns]);
   const axisFormat = useMemo(() => sessionTimeAxisFormat(chart[0]?.timestamp ?? 0, chart.at(-1)?.timestamp ?? 0), [chart]);
-  const heading = <header className="detail-header"><div><h1>Session 明細</h1><Link to={returnTo}><ArrowLeft size={16} aria-hidden="true" />返回 Sessions</Link></div>{session ? <code>{shortId(session.sessionId)}</code> : null}</header>;
+  const heading = <header className="detail-header"><div><h1>Session 明細</h1><Link to={returnTo}><ArrowLeft size={16} aria-hidden="true" />{returnTo.startsWith("/projects/") ? "返回專案明細" : "返回 Sessions"}</Link></div>{session ? <code>{shortId(session.sessionId)}</code> : null}</header>;
   if (error) return <div className={styles.page}>{heading}<div className={styles.empty}><h2>無法載入這段紀錄</h2><p role="alert">請返回列表再試一次，或重新掃描資料來源。</p><details className={styles.errorDetails}><summary>查看錯誤詳情</summary><p>{error}</p></details></div></div>;
   if (!session) return <div className={styles.page}>{heading}<div className="page-loading" role="status">正在載入 Session 明細…</div></div>;
   const models = [...new Set((session.turns ?? []).map(turn => turn.model || "未知模型"))];
@@ -62,7 +63,7 @@ export function SessionDetailPage() {
     {heading}
     <div className={styles.content}>
       <p className="footnote">這裡顯示整段對話的所有日期與模型；所選期間的用量請看 Sessions 列表。</p>
-      <section className="metadata-strip"><div><span>使用模型</span><strong>{models.length ? models.join("、") : session.model}</strong></div><div><span>專案</span><strong>{session.project}</strong></div><div><span>開始時間</span><strong>{formatDateTime(session.startedAt)}</strong></div><div><span>最後活動</span><strong>{formatDateTime(session.endedAt)}</strong></div><div><span>資料來源</span><strong>{session.sourceName}</strong></div></section>
+      <section className="metadata-strip"><div><span>使用模型</span><strong>{models.length ? models.join("、") : session.model}</strong></div><div><span>專案</span><strong><Link className={styles.projectLink} to={projectPath(session.project)}>{session.project}</Link></strong></div><div><span>開始時間</span><strong>{formatDateTime(session.startedAt)}</strong></div><div><span>最後活動</span><strong>{formatDateTime(session.endedAt)}</strong></div><div><span>資料來源</span><strong>{session.sourceName}</strong></div></section>
       <section className="detail-metrics">{metricItems.map(({ Icon, label, value, hint }) => <div key={label}><Icon size={20} /><span>{label}</span><strong>{value}</strong>{hint ? <small>{hint}</small> : null}</div>)}</section>
       <section className={`${styles.tablePanel} detail-chart-panel`}>
         <h2 className={styles.tableTitle}>Token 累積曲線</h2>

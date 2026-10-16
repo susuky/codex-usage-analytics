@@ -1,7 +1,7 @@
 import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Activity, BarChart3, Box, ChartNoAxesCombined, PanelLeftClose, PanelLeftOpen, CircleGauge, Minus, RefreshCw, Settings, Square, TerminalSquare, X } from "lucide-react";
+import { Activity, BarChart3, Box, ChartNoAxesCombined, FolderOpen, PanelLeftClose, PanelLeftOpen, CircleGauge, Minus, RefreshCw, Settings, Square, TerminalSquare, X } from "lucide-react";
 import styles from "./AppShell.module.css";
 import { loadSidebarCollapsed, saveSidebarCollapsed } from "../lib/preferences";
 
@@ -9,6 +9,7 @@ const navigation = [
   { to: "/", label: "總覽", icon: CircleGauge, end: true },
   { to: "/trends", label: "趨勢", icon: ChartNoAxesCombined },
   { to: "/sessions", label: "Sessions", icon: BarChart3 },
+  { to: "/projects", label: "專案", icon: FolderOpen },
   { to: "/models", label: "模型", icon: Box },
   { to: "/activity", label: "活動", icon: Activity },
   { to: "/sync", label: "同步", icon: RefreshCw },
@@ -37,7 +38,7 @@ function handleTitlebarMouseDown(event: MouseEvent<HTMLElement>) {
 export function AppShell({ children }: { children: ReactNode }) {
   const { pathname } = useLocation();
   useEffect(() => {
-    const title = pathname.startsWith("/sessions/") ? "Session 明細" : navigation.find(item => item.to === pathname)?.label;
+    const title = pathname.startsWith("/sessions/") ? "Session 明細" : pathname.startsWith("/projects/") ? "專案明細" : navigation.find(item => item.to === pathname)?.label;
     document.title = title ? `${title} · Codex 用量分析` : "Codex 用量分析";
   }, [pathname]);
   const [collapsed, setCollapsed] = useState(loadSidebarCollapsed);

@@ -63,6 +63,7 @@ export function SessionsPage() {
       <section className={styles.sessionFilters} aria-label="篩選 Sessions">
         <div className={styles.filterHeading}>
           <span><SlidersHorizontal size={16} aria-hidden="true" />篩選紀錄</span>
+          <Link className={styles.textLink} to="/projects">查看專案</Link>
           {hasFilters ? <button className={styles.clearButton} onClick={clear}><X size={14} aria-hidden="true" />清除篩選</button> : null}
         </div>
         <div className={styles.sessionFilterGrid}>

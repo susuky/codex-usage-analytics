@@ -143,8 +143,35 @@
 .pagination button { display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid #41515a; border-radius: 7px; color: var(--text); background: var(--surface); cursor: pointer; }
 .pagination button:hover:not(:disabled) { color: var(--mint); background: var(--surface-raised); }
 .pagination button:disabled { opacity: .4; cursor: not-allowed; }
+.projectFilters { grid-template-columns: minmax(220px, 1.6fr) repeat(2, minmax(130px, 1fr)); margin-bottom: 20px; }
+.projectHeading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; margin: 8px 0 20px; }
+.projectHeading h2 { min-width: 0; max-width: 100%; margin: 0; overflow-wrap: anywhere; font-size: 24px; }
+.projectHeading label { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; color: var(--muted); font-size: 14px; }
+.projectHeading select { max-width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid #41515a; border-radius: 7px; color: var(--text); background: var(--surface); font-size: 14px; }
+.projectMetadata:global(.metadata-strip) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.projectMetadata:global(.metadata-strip) div { min-width: 0; padding: 16px; }
+.projectMetadata strong { overflow-wrap: anywhere; }
+.projectDailyAction { padding: 0 16px 8px; }
+.projectTable td:first-child { max-width: 300px; white-space: normal; overflow-wrap: anywhere; }
+.projectTable td:nth-child(3) { max-width: 220px; white-space: normal; overflow-wrap: anywhere; }
+.projectTable th:nth-child(2), .projectTable th:nth-child(n+5), .projectTable td:nth-child(2) { text-align: right; }
+.projectLink { color: var(--mint); text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
 @media (max-width: 1100px) { .sessionFilterGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 640px) {
+  .projectFilters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .projectFilters > label:last-child { grid-column: auto; }
+  .projectHeading label { width: 100%; }
+  .projectHeading select { flex: 1; min-width: 0; font-size: 16px; }
+  .projectMetadata:global(.metadata-strip) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .projectTable, .projectTable thead, .projectTable tbody { display: block; min-width: 0; }
+  .projectTable thead { display: none; }
+  .projectTable tbody tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+  .projectTable tbody tr:last-child { border: 0; }
+  .projectTable td { min-width: 0; height: auto; padding: 0; border: 0; white-space: normal; overflow-wrap: anywhere; }
+  .projectTable td:first-child { grid-column: 1 / -1; font-size: 16px; font-weight: 600; }
+  .projectTable td:first-child a { display: inline-flex; align-items: center; min-height: 44px; }
+  .projectTable th:nth-child(2), .projectTable th:nth-child(n+5), .projectTable td:nth-child(2), .projectTable .numeric { text-align: left; }
+  .projectTable td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 4px; color: var(--muted); font-size: 12px; }
   .healthGrid { grid-template-columns: 1fr; gap: 0; margin-bottom: 20px; }
   .sessionFilterGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sessionFilterGrid > label:first-child, .sessionFilterGrid > label:last-child { grid-column: 1 / -1; }

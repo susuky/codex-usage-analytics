@@ -6,6 +6,8 @@ import { useAutomaticPricing } from "./lib/useAutomaticPricing";
 
 const SessionsPage = lazy(() => import("./pages/SessionsPage").then(module => ({ default: module.SessionsPage })));
 const SessionDetailPage = lazy(() => import("./pages/SessionDetailPage").then(module => ({ default: module.SessionDetailPage })));
+const ProjectsPage = lazy(() => import("./pages/ProjectsPage"));
+const ProjectDetailPage = lazy(() => import("./pages/ProjectDetailPage"));
 
 const TrendsPage = lazy(() => import("./pages/TrendsPage"));
 const ModelsPage = lazy(() => import("./pages/ModelsPage"));
@@ -23,6 +25,8 @@ export function App() {
           <Route path="/trends" element={<TrendsPage />} />
           <Route path="/sessions" element={<SessionsPage />} />
           <Route path="/sessions/:sourceId/:sessionId" element={<SessionDetailPage />} />
+          <Route path="/projects" element={<ProjectsPage />} />
+          <Route path="/projects/:project" element={<ProjectDetailPage />} />
           <Route path="/models" element={<ModelsPage />} />
           <Route path="/activity" element={<ActivityPage />} />
           <Route path="/sync" element={<SyncPage />} />

@@ -87,7 +87,7 @@
 @media (max-width: 640px) {
   .body, .collapsed { display: block; }
   .sidebar { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 8px !important; }
-  .sidebar nav { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; }
+  .sidebar nav { display: grid; grid-template-columns: repeat(8, minmax(44px, 1fr)); gap: 2px; overflow-x: auto; }
   .navItem, .collapsed .navItem { flex-direction: column; justify-content: center; gap: 4px; min-height: 52px; padding: 4px 0; font-size: 11px; }
   .collapsed .navItem span { display: block; }
   .sidebarBottom { display: none; }
