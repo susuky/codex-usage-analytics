@@ -163,6 +163,8 @@ pub fn parse_official(document: &str, reviewed_at: &str) -> Result<Vec<PricingRu
     let mut standard = BTreeMap::<String, Rates>::new();
     let mut fast = BTreeMap::<String, Rates>::new();
     let (mut family, mut tier, mut columns) = ("", "", 0);
+    let mut rate_columns = [None; 8];
+    let mut model_column = 0;
     for line in document.lines().map(str::trim) {
         let heading = line.trim_start_matches('#').trim();
         match heading {
@@ -176,16 +178,31 @@ pub fn parse_official(document: &str, reviewed_at: &str) -> Result<Vec<PricingRu
         }
         if !line.starts_with('|') { columns = 0; continue; }
         let row = cells(line);
-        if family == "flagship" && row == ["Model", "Short context input", "Short context cached input", "Short context cache writes", "Short context output", "Long context input", "Long context cached input", "Long context cache writes", "Long context output"] { columns = 9; continue; }
-        if family == "specialized" && row == ["Category", "Model", "Input", "Cached input", "Output"] { columns = 5; continue; }
-        if columns == 0 || !matches!(tier, "standard" | "fast") || row.iter().all(|cell| cell.chars().all(|c| c == '-' || c == ':')) { continue; }
+        if !matches!(tier, "standard" | "fast") { continue; }
+        if matches!(family, "flagship" | "specialized") && matches!(row.first(), Some(&"Model" | &"Category")) {
+            columns = row.len();
+            model_column = row.iter().position(|column| *column == "Model").ok_or(FORMAT_ERROR)?;
+            let context = row.iter().any(|column| column.starts_with("Short context "));
+            let names = if context {
+                ["Short context input", "Short context cached input", "Short context cache writes", "Short context output", "Long context input", "Long context cached input", "Long context cache writes", "Long context output"]
+            } else { ["Input", "Cached input", "", "Output", "", "", "", ""] };
+            // The existing cache-write rate represents the 30-minute retention tier.
+            // Match names so reordered columns and the new 12-hour tier stay separate.
+            let normalized: Vec<_> = row.iter().map(|column| column.replace("30m write", "cache writes")).collect();
+            if normalized.iter().collect::<HashSet<_>>().len() != normalized.len() { return Err(FORMAT_ERROR.into()); }
+            rate_columns = names.map(|name| normalized.iter().position(|column| column == name));
+            if [0, 1, 3].iter().any(|index| rate_columns[*index].is_none()) || (context && rate_columns.iter().any(Option::is_none)) {
+                return Err(FORMAT_ERROR.into());
+            }
+            continue;
+        }
+        if columns == 0 || row.iter().all(|cell| cell.chars().all(|c| c == '-' || c == ':')) { continue; }
         if row.len() != columns { return Err(FORMAT_ERROR.into()); }
-        if columns == 5 && row[0] != "Codex" { continue; }
-        let model_cell = row[if columns == 5 { 1 } else { 0 }];
+        if family == "specialized" && row[0] != "Codex" { continue; }
+        let model_cell = row[model_column];
         let model = model_cell.split_whitespace().next().unwrap_or("").trim_matches('`');
         if model.is_empty() || !model.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.')) { return Err(FORMAT_ERROR.into()); }
-        let values = if columns == 9 { row[1..].iter().map(|v| amount(v)).collect::<Result<Vec<_>, _>>()? }
-            else { vec![amount(row[2])?, amount(row[3])?, None, amount(row[4])?, None, None, None, None] };
+        let values = rate_columns.iter().map(|column| column.map(|index| amount(row[index])).unwrap_or(Ok(None))).collect::<Result<Vec<_>, _>>()?;
         if values[0].is_none() || values[3].is_none() { return Err(FORMAT_ERROR.into()); }
         let threshold = model_cell.split("<").nth(1).and_then(|v| v.split('K').next()).and_then(|v| v.parse::<i64>().ok()).map(|v| v * 1000);
         let target = if tier == "standard" { &mut standard } else { &mut fast };
@@ -237,6 +254,7 @@ mod tests {
     use crate::{models::TokenBreakdown, pricing::estimate_with_rules_for_tier};
 
     const FEED: &str = include_str!("../fixtures/official-pricing.md");
+    const CURRENT_FEED: &str = include_str!("../fixtures/official-pricing-current.md");
 
     fn test_path() -> std::path::PathBuf {
         std::env::temp_dir().join(format!("pricing-refresh-{}-{}.sqlite3", std::process::id(), Utc::now().timestamp_nanos_opt().unwrap()))
@@ -288,6 +306,34 @@ mod tests {
         let rules = parse_official(&feed, "2026-10-01").unwrap();
         assert_eq!(find_rule(&rules, "gpt-6-astra").unwrap().priority_multiplier, 2.0);
         assert_eq!(find_rule(&rules, "gpt-5.3-codex").unwrap().priority_multiplier, 2.0);
+    }
+
+    #[test]
+    fn imports_reordered_columns_retention_tiers_and_compact_tables() {
+        let rules = parse_official(CURRENT_FEED, "2026-10-22").unwrap();
+        let astra = find_rule(&rules, "gpt-6-astra").unwrap();
+        assert_eq!(astra.input_usd_per_million, 10.0);
+        assert_eq!(astra.cached_usd_per_million, 1.0);
+        assert_eq!(astra.cache_write_usd_per_million, 12.5);
+        assert_eq!(astra.output_usd_per_million, 50.0);
+        assert_eq!(astra.priority_multiplier, 2.0);
+        let mini = find_rule(&rules, "gpt-5.4-mini").unwrap();
+        assert_eq!(mini.input_usd_per_million, 0.75);
+        assert_eq!(mini.cached_usd_per_million, 0.075);
+        assert_eq!(mini.output_usd_per_million, 4.5);
+        assert!(mini.unavailable_rates.contains(&"cacheWrite".to_string()));
+        assert_eq!(mini.priority_multiplier, 2.0);
+        let codex = find_rule(&rules, "gpt-5.3-codex").unwrap();
+        assert_eq!(codex.cached_usd_per_million, 0.175);
+        assert_eq!(codex.output_usd_per_million, 14.0);
+        assert_eq!(rules.len(), 7);
+        let usage = TokenBreakdown { input_tokens: 300000, cached_input_tokens: 100000, cache_write_input_tokens: 100000, output_tokens: 10000, total_tokens: 310000, ..TokenBreakdown::default() };
+        assert_eq!(estimate_with_rules_for_tier("gpt-6-astra", &usage, "fast", &rules), Some(10900000));
+        let changed_flex = CURRENT_FEED.replace("#### Flex\n\n| Model | Input | Output | Cached input |", "#### Flex\n\n| Model | Batch input | Output | Cached input |");
+        assert_eq!(parse_official(&changed_flex, "2026-10-22").unwrap(), rules);
+        for broken in [CURRENT_FEED.replace("Short context input", "Input tokens"), CURRENT_FEED.replace("Short context 12h write", "Short context 30m write"), CURRENT_FEED.replace("$50.00", "$NaN"), CURRENT_FEED.replace("| $50.00 |", "|")] {
+            assert!(parse_official(&broken, "2026-10-22").is_err());
+        }
     }
 
     #[test]

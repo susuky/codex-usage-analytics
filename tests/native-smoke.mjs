@@ -51,6 +51,8 @@ try {
   if(!browser) throw new Error(`Native WebView test connection did not become ready. Diagnostics: ${root}. ${connectionError??''}`);
   let page=browser.contexts()[0].pages()[0];const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await expect(page.getByRole('heading',{name:'用量總覽'})).toBeVisible({timeout:30_000});
+  // This suite checks exit/relaunch; tray residency has its own native suite.
+  await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('save_desktop_preferences', {preferences:{launchAtStartup:false,closeToTray:false}}));
   await expect(page.getByRole('button',{name:'重新掃描',exact:true})).toBeEnabled({timeout:30_000});
   const isMaximized = () => page.evaluate(() => window.__TAURI_INTERNALS__.invoke('plugin:window|is_maximized', {label:'main'}));
   const initiallyMaximized = await isMaximized();
@@ -127,7 +129,8 @@ try {
   await page.screenshot({path:join(root,'native-official-pricing.png')});
   await page.getByRole('button',{name:'取消',exact:true}).click();
   await page.getByLabel('搜尋模型價格').fill('');
-  await expect(page.locator('.pricing-table tbody tr')).toHaveCount(official.officialRules.length+1);
+  const savedCatalog=await page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('get_settings'));
+  await expect(page.locator('.pricing-table tbody tr')).toHaveCount(savedCatalog.pricingRules.length);
   const names=await page.locator('.pricing-model-name').allTextContents();
   if(JSON.stringify(names)!==JSON.stringify([...names].sort((a,b)=>a.localeCompare(b,'en',{numeric:true,sensitivity:'base'})))) throw new Error('Native model name sorting failed');
   await page.getByRole('link',{name:'模型價格',exact:true}).click();
