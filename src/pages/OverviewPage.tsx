@@ -54,13 +54,13 @@ export function OverviewPage() {
 
   return (
     <div className={styles.page}>
-      <PageHeader title="用量總覽" subtitle="掌握每日用量、模型分布與使用成本" />
+      <PageHeader title="用量總覽" />
       <section className={styles.metricRail} aria-label="用量摘要">
-        <Metric icon={Coins} label={!filter.startDate && filter.days >= 36500 ? "全部 Tokens" : "區間 Tokens"} value={formatTokens(data.totals.totalTokens)} hint="依所選日期統計" />
+        <Metric icon={Coins} label={!filter.startDate && filter.days >= 36500 ? "全部 Tokens" : "區間 Tokens"} value={formatTokens(data.totals.totalTokens)} />
         <Metric icon={CalendarClock} label="今日 Tokens" value={formatTokens(todayTokens)} hint="依裝置當地時間" />
         <Metric icon={Gauge} label="API 等值估算" value={formatCost(data.estimateMicrousd)} hint={unpricedTokens > 0 ? `${formatTokens(unpricedTokens)} tokens 尚未定價` : undefined} />
         <Metric icon={Bot} label="快取命中率" value={`${rate.toFixed(1)}%`} hint="快取輸入占總輸入比例" />
-        <Metric icon={MessagesSquare} label="Sessions" value={formatInteger(data.sessions.length)} hint="所選區間內的對話" />
+        <Metric icon={MessagesSquare} label="Sessions" value={formatInteger(data.sessions.length)} />
       </section>
       <div className={styles.content}>
         <div className={styles.charts}>

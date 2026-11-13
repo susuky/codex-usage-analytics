@@ -170,13 +170,7 @@ function PriceDialog({ model: initialModel, original, official, rules, onSave, o
     return { label, value: values[field].trim() && Number.isFinite(value) && Number.isFinite(multiplier) && multiplier > 0 ? `$${price(value * multiplier)}` : "—" };
   });
 
-  return <dialog ref={dialog} className="price-dialog" aria-labelledby={`${id}-title`} aria-describedby={`${id}-description`} onCancel={event => { event.preventDefault(); if (!saving) onDismiss(); }} onKeyDown={event => {
-    if (event.key !== "Tab") return;
-    const controls = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled])')];
-    const first = controls[0], last = controls.at(-1);
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-  }}>
+  return <dialog ref={dialog} className="price-dialog" aria-labelledby={`${id}-title`} aria-describedby={`${id}-description`} onCancel={event => { event.preventDefault(); if (!saving) onDismiss(); }}>
     <form onSubmit={submit} noValidate>
       <div className="price-dialog-heading"><div><h2 id={`${id}-title`}>{original ? "編輯模型價格" : "新增自訂價格"}</h2><p id={`${id}-description`}>美元／每百萬 Tokens · 保存後重新計算估算費用</p></div><button type="button" className="price-dialog-close" aria-label="關閉價格編輯" disabled={saving} onClick={onDismiss}><X size={19} /></button></div>
       <div className="price-dialog-body">

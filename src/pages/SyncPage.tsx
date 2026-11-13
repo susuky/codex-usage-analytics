@@ -17,7 +17,7 @@ export default function SyncPage() {
     try { await syncNow(data); setMessage("去識別化統計已同步"); } catch (cause) { setMessage(cause instanceof Error ? cause.message : String(cause)); }
   };
   const enabledCount = data?.sources.filter(source => source.enabled).length ?? 0;
-  return <div className={styles.page}><PageHeader title="同步" subtitle="查看各裝置的更新狀態，讓使用紀錄保持完整" showDateFilter={false} /><div className={styles.content}>
+  return <div className={styles.page}><PageHeader title="同步" showDateFilter={false} /><div className={styles.content}>
     <section className="source-list"><div className="source-list-heading"><div><h2>資料來源</h2><p>{enabledCount} 個來源已啟用 · App 開啟時，每 {pollMinutes} 分鐘掃描一次</p></div><button className="primary-button" disabled={scanning || !enabledCount} onClick={() => void refresh(true)}><RefreshCw size={16} />{scanning ? "掃描中…" : "完整掃描所有來源"}</button></div>{!enabledCount && data ? <div className={styles.empty}><p>啟用本機或遠端來源後，就能更新使用紀錄。</p><Link className={styles.textLink} to="/settings">管理資料來源</Link></div> : null}{data?.sources.map((source) => {
       const state = !source.enabled ? "disabled" : source.lastError ? "error" : source.stale || !source.lastScannedAt ? "pending" : "ok";
       const StateIcon = state === "disabled" ? PauseCircle : state === "error" ? AlertCircle : state === "pending" ? Clock3 : CheckCircle2;

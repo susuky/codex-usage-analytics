@@ -32,7 +32,7 @@ export default function ProjectsPage() {
   };
   const header = (key: ProjectSortKey, label: string) => <th role="columnheader" scope="col" aria-sort={sortKey === key ? asc ? "ascending" : "descending" : "none"}><button type="button" className={styles.sortButton} onClick={() => toggleSort(key)}>{label}<span aria-hidden="true">{sortKey !== key ? <ChevronsUpDown size={13} /> : asc ? <ArrowUp size={13} /> : <ArrowDown size={13} />}</span></button></th>;
   return <div className={styles.page}>
-    <PageHeader title="專案" subtitle="彙整各專案的用量、估算成本與 Sessions" />
+    <PageHeader title="專案" />
     <div className={styles.content}>
       <section className={`${styles.sessionFilterGrid} ${styles.projectFilters}`} aria-label="篩選專案">
         <label><span>搜尋</span><span className="search-control"><Search size={16} aria-hidden="true" /><input aria-label="搜尋專案" name="q" type="search" autoComplete="off" spellCheck={false} placeholder="專案名稱…" value={query} onChange={event => update("q", event.target.value)} /></span></label>

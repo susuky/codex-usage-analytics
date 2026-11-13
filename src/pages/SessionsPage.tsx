@@ -58,7 +58,7 @@ export function SessionsPage() {
   const returnTo = `/sessions${returnParams.size ? `?${returnParams}` : ""}`;
 
   return <div className={styles.page}>
-    <PageHeader title="Sessions" subtitle="查詢各段對話的用量、模型與估算成本" />
+    <PageHeader title="Sessions" />
     <div className={styles.content}>
       <section className={styles.sessionFilters} aria-label="篩選 Sessions">
         <div className={styles.filterHeading}>

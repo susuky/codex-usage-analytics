@@ -134,6 +134,38 @@ test("narrow Session rows show tokens and costs without horizontal scrolling", a
   await expect(region.getByRole("columnheader", { name: "Tokens", exact: true })).toHaveAttribute("aria-sort", "ascending");
 });
 
+test("Session tables adapt when the desktop sidebar changes their available width", async ({ page }) => {
+  await page.setViewportSize({ width: 960, height: 700 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/projects");
+  const project = page.getByRole("region", { name: "專案用量與成本" }).getByRole("link").first();
+  await expect(project).toBeVisible();
+  const projectPath = await project.getAttribute("href");
+
+  for (const route of ["/", "/sessions", projectPath!]) {
+    await page.goto(route);
+    const region = page.getByRole("region", { name: "Session 使用紀錄" });
+    const row = region.getByRole("row").nth(1);
+    await expect(row).toBeVisible();
+    for (const toggle of ["展開側欄", "收合側欄"]) {
+      await page.getByRole("button", { name: toggle, exact: true }).click();
+      await expect.poll(() => region.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      const bounds = await region.boundingBox();
+      const cells = row.getByRole("cell");
+      await expect(cells).toHaveCount(6);
+      for (const index of [4, 5]) {
+        const cell = await cells.nth(index).boundingBox();
+        expect(cell!.x).toBeGreaterThanOrEqual(bounds!.x);
+        expect(cell!.x + cell!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width);
+      }
+      const header = region.getByRole("columnheader", { name: "Tokens", exact: true });
+      await header.getByRole("button").focus();
+      await page.keyboard.press("Enter");
+      await expect(header).toHaveAttribute("aria-sort", toggle === "展開側欄" ? "ascending" : "descending");
+    }
+  }
+});
+
 test("settings navigation keeps labeled pricing fields inside the viewport", async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
   await page.goto("/settings");

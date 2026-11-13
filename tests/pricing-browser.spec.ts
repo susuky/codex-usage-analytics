@@ -48,7 +48,7 @@ test("all models are available immediately, global search and name sorting need 
   expect(errors).toEqual([]);
 });
 
-test("edit dialog has visible save and cancel, keyboard focus stays inside, and cancel discards edits", async ({ page }, testInfo) => {
+test("native edit dialog blocks background focus, restores focus, and discards canceled edits", async ({ page }, testInfo) => {
   await page.goto("/settings");
   await page.getByLabel("搜尋模型價格").fill("gpt-5.6-sol");
   const edit = page.getByRole("button", { name: "編輯 gpt-5.6-sol 價格" });
@@ -67,9 +67,20 @@ test("edit dialog has visible save and cancel, keyboard focus stays inside, and 
     expect(inputBox!.y + inputBox!.height).toBeLessThanOrEqual(footerBox!.y);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`02-edit-${viewport.width}.png`) });
-    await page.getByRole("button", { name: "關閉價格編輯" }).focus();
-    await page.keyboard.press("Shift+Tab");
-    await expect(page.getByRole("button", { name: "保存價格" })).toBeFocused();
+    await edit.focus();
+    await expect(page.getByLabel("gpt-5.6-sol input 價格")).toBeFocused();
+    const close = page.getByRole("button", { name: "關閉價格編輯" });
+    const save = page.getByRole("button", { name: "保存價格" });
+    for (const [from, key, to] of [[close, "Shift+Tab", save], [save, "Tab", close]] as const) {
+      await from.focus();
+      await page.keyboard.press(key);
+      // Native dialogs may include browser chrome in the tab order, but never page controls behind the modal.
+      if (!await page.evaluate(() => document.hasFocus())) {
+        expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+        await page.keyboard.press(key);
+      }
+      await expect(to).toBeFocused();
+    }
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
     await expect(edit).toBeFocused();

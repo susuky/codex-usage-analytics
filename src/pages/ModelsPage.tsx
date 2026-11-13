@@ -33,7 +33,7 @@ export default function ModelsPage() {
   const { data, loading, error, reload } = useUsageData();
   return (
     <div className={styles.page}>
-      <PageHeader title="模型" subtitle="比較 token 組成、Thinking、快取效率、快速模式與 API 等值估算" />
+      <PageHeader title="模型" />
       <div className={styles.content}>
         {loading && !data ? <div className="page-loading" role="status">正在載入模型用量…</div> : error && !data ? <div className={styles.empty}>
           <h2>暫時無法顯示模型用量</h2><p>請重新載入，或查看資料來源的更新狀態。</p><button className="secondary-button" onClick={() => void reload()}>重新載入</button>

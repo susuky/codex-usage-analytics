@@ -23,7 +23,7 @@ export function SessionTable({ sessions, limit, sort: controlledSort, onSortChan
   const header = (key: SessionSortKey, label: string) => <th role="columnheader" scope="col" aria-sort={sort.key === key ? sort.asc ? "ascending" : "descending" : "none"} className={key === "tokens" || key === "cost" ? styles.numeric : undefined}><button className={styles.sortButton} onClick={() => toggle(key)}>{label}<span aria-hidden="true">{icon(key)}</span></button></th>;
 
   return (
-    <div className={styles.tableWrap} tabIndex={0} role="region" aria-label="Session 使用紀錄">
+    <div className={`${styles.tableWrap} ${styles.sessionTableWrap}`} tabIndex={0} role="region" aria-label="Session 使用紀錄">
       <table className={`${styles.table} ${styles.sessionTable}`} role="table" aria-label="Sessions 用量與成本">
         <thead role="rowgroup"><tr role="row">{header("project", "專案")}{header("model", "模型")}<th role="columnheader" scope="col" className={styles.sourceColumn}>來源</th>{header("endedAt", "最後活動")}{header("tokens", "Tokens")}{header("cost", "估算成本")}</tr></thead>
         <tbody role="rowgroup">
