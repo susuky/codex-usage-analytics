@@ -12,7 +12,7 @@ const navigation = [
   { to: "/projects", label: "專案", icon: FolderOpen },
   { to: "/models", label: "模型", icon: Box },
   { to: "/activity", label: "活動", icon: Activity },
-  { to: "/sync", label: "同步", icon: RefreshCw },
+  { to: "/sync", label: "資料來源", icon: RefreshCw },
   { to: "/settings", label: "設定", icon: Settings }
 ];
 

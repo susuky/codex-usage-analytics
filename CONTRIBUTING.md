@@ -5,13 +5,11 @@
 | 位置 | 內容 |
 | --- | --- |
 | `src/` | React 介面、型別、前端狀態與單元測試 |
-| `src-tauri/src/` | Rust 解析、SQLite、價格、SSH 與雲端同步；遠端聚合腳本 |
+| `src-tauri/src/` | Rust 解析、SQLite、價格與 SSH 遠端聚合腳本 |
 | `src-tauri/fixtures/` | 人工測試紀錄與價格解析樣本 |
 | `tests/` | Playwright 互動測試與原生 Windows 煙霧測試 |
 | `scripts/` | 預覽、打包與資料庫檢查工具 |
-| `supabase/migrations/` | 雲端資料表、RLS 與同步 RPC |
-| `auth-callback/` | 選用的 Magic Link 登入回呼頁 |
-| `.github/workflows/` | CI、打包與回呼頁部署 |
+| `.github/workflows/` | CI 與打包 |
 | `archive/` | 歷史研究筆記，不代表現行規格或待辦清單 |
 
 ## 建置與測試
@@ -27,9 +25,9 @@ pnpm test:e2e
 cargo test --locked --manifest-path src-tauri/Cargo.toml
 ```
 
-- 前端測試涵蓋日期、篩選、同步佇列及 PGlite migrations／RLS／原子回滾。
+- 前端測試涵蓋日期、篩選、來源設定與費率計算。
 - Rust 測試涵蓋解析、去重、估算、資料保留與跨語言聚合一致性；需要 Python 3 可從 PATH 執行。
-- 瀏覽器測試使用 `dist/` 與範例資料，須先建置；不驗證真實 SSH 或 Supabase 登入。
+- 瀏覽器測試使用 `dist/` 與範例資料，須先建置；不驗證真實 SSH 連線。
 
 `build.bat` 在 `%TEMP%` 暫存來源並建置 Windows 成品，Rust 中間產物位於 `%TEMP%/CodexUsageAnalytics-cargo-target`。建置或測試執行時不要清理這些目錄。
 
@@ -41,7 +39,7 @@ node tests/desktop-native-smoke.mjs outputs/<成品目錄>/CodexUsageAnalytics.e
 node tests/portable-update-native-smoke.mjs outputs/<成品目錄>/CodexUsageAnalytics.exe
 ```
 
-腳本建立暫存資料庫與人工紀錄，關閉 SSH／雲端，檢查掃描、單日模型分布、設定、價格、視窗操作與重新啟動後的偏好。它需要 Node.js 22.16+ 或 24，並連線下載官方價格；不更改日常使用資料，也不等於安裝包、真實遠端或登入驗證。
+腳本建立暫存資料庫與人工紀錄，關閉 SSH，檢查掃描、單日模型分布、設定、價格、視窗操作與重新啟動後的偏好。它需要 Node.js 22.16+ 或 24，並連線下載官方價格；不更改日常使用資料，也不等於安裝包或真實遠端驗證。
 
 `desktop-native-smoke.mjs` 使用獨立資料庫、單一實例識別碼與開機啟動登錄名稱，驗證啟動設定、系統匣操作、關閉常駐、再次開啟及隱藏啟動。測試結束會移除測試新增的開機啟動登錄；截圖保存在系統暫存目錄。
 
@@ -63,4 +61,4 @@ node tests/portable-update-native-smoke.mjs outputs/<成品目錄>/CodexUsageAna
 
 提交前檢查實際 diff、`git diff --check` 及與變更相符的測試。更新版本時同步調整 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`src-tauri/tauri.conf.json` 與 `CHANGELOG.md`。
 
-推送 `app-v<版本>` tag 才會觸發跨平台 draft release。登入回呼需先將 GitHub Pages 的建置來源設為 GitHub Actions，再手動執行 `Deploy auth callback` workflow；雲端不是本機分析的必要條件。成品目前未簽章，發佈說明應明確區分實際通過的驗證與尚未驗證的流程。
+推送 `app-v<版本>` tag 才會觸發跨平台 draft release。成品目前未簽章，發佈說明應明確區分實際通過的驗證與尚未驗證的流程。

@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { buildDemoOverview, buildDemoSources, demoSessions } from "./mockData";
 import { emptyDailyUsage, localDateKey } from "./daily";
 import { applyNonBillablePricing, isNonBillableModel, nonBillablePricingRule } from "./pricing";
-import type { AppSettings, OverviewData, PricingRule, PricingStatus, PricingUpdateResult, ProjectDetailData, ScanResult, SessionAggregate, SshSourceConfig, StoredSyncState, UsageFilter, UsageSource } from "../types";
+import type { AppSettings, OverviewData, PricingRule, PricingStatus, PricingUpdateResult, ProjectDetailData, ScanResult, SessionAggregate, SshSourceConfig, UsageFilter, UsageSource } from "../types";
 
 const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -22,11 +22,6 @@ export async function listSessions(filter: UsageFilter): Promise<SessionAggregat
   return invoke<SessionAggregate[]>("list_sessions", { filter });
 }
 
-export async function listSyncSessions(): Promise<SessionAggregate[]> {
-  if (!isTauri()) return demoSessions;
-  return invoke<SessionAggregate[]>("list_sync_sessions");
-}
-
 export async function getSessionDetail(sourceId: string, sessionId: string): Promise<SessionAggregate> {
   if (!isTauri()) {
     const session = demoSessions.find((item) => item.sourceId === sourceId && item.sessionId === sessionId) ?? demoSessions[2];
@@ -43,18 +38,6 @@ export async function scanSources(forceFull = false): Promise<ScanResult> {
   return invoke<ScanResult>("scan_sources", { forceFull });
 }
 
-export async function getSyncState(userId: string): Promise<StoredSyncState> {
-  if (isTauri()) return invoke("get_sync_state", { userId });
-  return JSON.parse(sessionStorage.getItem(`cloud-state:${userId}`) ?? '{"acknowledged":{},"pending":{},"lastSyncedAt":null}');
-}
-export async function saveSyncState(userId: string, syncState: StoredSyncState): Promise<void> {
-  if (isTauri()) await invoke("save_sync_state", { userId, syncState });
-  else sessionStorage.setItem(`cloud-state:${userId}`, JSON.stringify(syncState));
-}
-export async function mergeCloudSessions(userId: string, sessions: Array<{ sessionKey: string; session: SessionAggregate }>): Promise<void> {
-  if (isTauri()) await invoke("merge_cloud_sessions", { userId, sessions });
-}
-
 export async function testSshSource(target: string, codexHome = ""): Promise<string> {
   if (!isTauri()) {
     throw new Error("請在桌面版測試遠端連線。");
@@ -69,7 +52,6 @@ const defaultSettings: AppSettings = {
   sshTarget: "",
   sshEnabled: false,
   sshSources: [],
-  cloudEnabled: true,
   pollMinutes: 15,
   pricingRules: defaultPricingRules,
   autoUpdatePricing: true
@@ -125,21 +107,6 @@ export async function openPricingDocs(): Promise<void> {
     return;
   }
   await invoke("open_pricing_docs");
-}
-
-export async function secureGet(key: string): Promise<string | null> {
-  if (!isTauri()) return sessionStorage.getItem(`secure:${key}`);
-  return invoke<string | null>("secure_get", { key });
-}
-
-export async function secureSet(key: string, value: string): Promise<void> {
-  if (!isTauri()) sessionStorage.setItem(`secure:${key}`, value);
-  else await invoke("secure_set", { key, value });
-}
-
-export async function secureRemove(key: string): Promise<void> {
-  if (!isTauri()) sessionStorage.removeItem(`secure:${key}`);
-  else await invoke("secure_remove", { key });
 }
 
 function filterDemo(data: OverviewData, filter: UsageFilter): OverviewData {

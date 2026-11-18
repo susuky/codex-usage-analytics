@@ -29,9 +29,6 @@ export interface ProjectTimelinePoint {
 }
 
 export interface SessionAggregate {
-  aggregationVersion?: number;
-  syncFingerprint?: string;
-  excludedUsage?: { timestamp: string; totalTokens: number }[];
   sessionId: string;
   sourceId: string;
   sourceName: string;
@@ -152,29 +149,11 @@ export interface ScanResult {
   scannedAt: string;
 }
 
-export interface SyncStatus {
-  enabled: boolean;
-  syncing: boolean;
-  configured: boolean;
-  signedIn: boolean;
-  email: string | null;
-  pendingRows: number;
-  lastSyncedAt: string | null;
-  lastError: string | null;
-}
-
-export interface StoredSyncState {
-  acknowledged: Record<string, string>;
-  pending: Record<string, string>;
-  lastSyncedAt: string | null;
-}
-
 export interface AppSettings {
   codexHome: string;
   sshTarget?: string;
   sshEnabled?: boolean;
   sshSources: SshSourceConfig[];
-  cloudEnabled: boolean;
   pollMinutes: number;
   pricingRules: PricingRule[];
   autoUpdatePricing?: boolean;

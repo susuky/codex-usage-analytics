@@ -96,16 +96,10 @@ pub fn normalize_service_tier(value: &str) -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionAggregate {
-    #[serde(default = "legacy_aggregation_version")]
-    pub aggregation_version: i64,
-    #[serde(default)]
-    pub sync_fingerprint: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub excluded_usage: Vec<UsageIdentity>,
     #[serde(default = "scan_complete_default")]
     pub scan_complete: bool,
     pub session_id: String,
-    // Import-only evidence; database/cloud projections do not carry it forward.
+    // Import-only evidence; query results do not carry it forward.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub import_identity: Option<ImportIdentity>,
     pub source_id: String,
@@ -147,7 +141,6 @@ pub struct UsageIdentity {
 }
 
 fn scan_complete_default() -> bool { true }
-fn legacy_aggregation_version() -> i64 { 5 }
 
 #[derive(Debug, Default)]
 pub struct ScanSummary {
@@ -297,7 +290,6 @@ pub struct AppSettings {
     pub ssh_enabled: bool,
     #[serde(default)]
     pub ssh_sources: Vec<SshSourceConfig>,
-    pub cloud_enabled: bool,
     pub poll_minutes: i64,
     #[serde(default = "default_pricing_rules")]
     pub pricing_rules: Vec<PricingRule>,
@@ -320,6 +312,6 @@ pub struct SshSourceConfig {
 
 impl Default for AppSettings {
     fn default() -> Self {
-        Self { codex_home: String::new(), ssh_target: String::new(), ssh_enabled: false, ssh_sources: Vec::new(), cloud_enabled: true, poll_minutes: 15, pricing_rules: default_pricing_rules(), auto_update_pricing: true }
+        Self { codex_home: String::new(), ssh_target: String::new(), ssh_enabled: false, ssh_sources: Vec::new(), poll_minutes: 15, pricing_rules: default_pricing_rules(), auto_update_pricing: true }
     }
 }

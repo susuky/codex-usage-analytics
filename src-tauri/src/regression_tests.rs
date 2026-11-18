@@ -95,8 +95,8 @@ fn subagent_upgrade_reassigns_legacy_usage_without_loss_or_double_counting() {
     assert_eq!(db::get_session(&connection,"local","child").unwrap().tokens.total_tokens, 330);
     assert_eq!(db::get_session(&connection,"local","parent").unwrap().tokens.total_tokens, 485);
     assert!(!crate::import_repair::pending(&connection,"local").unwrap());
-    // Cloud snapshots produced by the old parser cannot resurrect wrong ownership.
-    db::save_cloud_sessions(&mut connection, &[wrong_parent, wrong_child]).unwrap();
+    // Reimporting older logs must not undo the ownership correction.
+    db::save_sessions(&mut connection, &[wrong_parent, wrong_child]).unwrap();
     assert_eq!(db::get_session(&connection,"local","child").unwrap().tokens.total_tokens, 330);
     assert_eq!(db::get_session(&connection,"local","parent").unwrap().tokens.total_tokens, 485);
     assert_eq!(crate::scanner::scan_local(&root, &mut connection, false).unwrap().scanned_sessions, 0);
@@ -160,15 +160,14 @@ fn auto_review_usage_survives_imports_and_legacy_price_upgrade_without_charges()
     let mut connection = db::open(&path).unwrap();
     let log = fixture().replace("gpt-5.6-sol", "codex-auto-review")
         .replace("\"last_token_usage\":null", "\"last_token_usage\":{\"total_tokens\":100}");
-    for kind in ["local", "ssh", "cloud"] {
+    for kind in ["local", "ssh"] {
         let parsed = parse_session(Cursor::new(&log), kind, kind, kind).unwrap();
         assert_eq!(parsed.tokens.total_tokens, 485);
         assert_eq!(parsed.token_event_count, 4);
         assert_eq!(parsed.estimate_microusd, Some(0));
         assert_eq!(parsed.unpriced_turn_count, 0);
         assert_eq!(parsed.unpriced_tokens, 0);
-        if kind == "cloud" { db::save_cloud_sessions(&mut connection, &[parsed]).unwrap(); }
-        else { db::save_sessions(&mut connection, &[parsed]).unwrap(); }
+        db::save_sessions(&mut connection, &[parsed]).unwrap();
     }
     let mut legacy = AppSettings::default();
     legacy.pricing_rules[0].input_usd_per_million = 9.0;
@@ -187,7 +186,7 @@ fn auto_review_usage_survives_imports_and_legacy_price_upgrade_without_charges()
     let settings = db::load_settings(&connection).unwrap();
     assert_eq!(settings.pricing_rules[0].input_usd_per_million, 9.0);
     assert_eq!(settings.pricing_rules.iter().find(|rule| rule.model == "codex-auto-review"), Some(&non_billable_pricing_rule()));
-    for kind in ["local", "ssh", "cloud"] {
+    for kind in ["local", "ssh"] {
         let saved = db::get_session(&connection, kind, "regression").unwrap();
         assert_eq!(saved.tokens.total_tokens, 485);
         assert_eq!(saved.activity_tokens, 485);
@@ -284,14 +283,6 @@ fn daily_session_tokens_and_costs_match_overview_across_dates_models_and_sources
     let complete = db::get_session(&connection, "local", "daily-models").unwrap();
     assert_eq!(complete.tokens.total_tokens, 2450);
     assert_eq!(complete.turns.as_ref().unwrap().len(), 5);
-    let snapshots = db::list_sync_sessions(&connection).unwrap();
-    let snapshot = snapshots.iter().find(|session| session.source_id == "local" && session.session_id == "daily-models").unwrap();
-    assert_eq!(snapshot.tokens, complete.tokens);
-    assert_eq!(snapshot.model, complete.model);
-    assert_eq!(snapshot.ended_at, complete.ended_at);
-    assert_eq!(snapshot.token_event_count, complete.token_event_count);
-    assert_eq!(snapshot.estimate_microusd, complete.estimate_microusd);
-    assert_eq!(snapshot.unpriced_tokens, complete.unpriced_tokens);
 }
 
 #[test]
@@ -455,22 +446,17 @@ fn fresh_settings_have_no_remote_and_saved_sources_survive_loading() {
 }
 
 #[test]
-fn startup_and_zero_price_and_cloud_queue_survive_reopening() {
+fn source_status_and_zero_price_survive_reopening() {
     let root=temp(); let path=root.join("usage.sqlite3"); let connection=db::open(&path).unwrap();
-    let mut source=UsageSource { id:"ssh-test".into(),name:"Test".into(),kind:"ssh".into(),target:None,enabled:false,stale:true,last_scanned_at:Some("2026-09-05T00:00:00Z".into()),last_error:Some("offline".into()),last_notice:None,session_count:0,latest_data_at:None };
+    let source=UsageSource { id:"ssh-test".into(),name:"Test".into(),kind:"ssh".into(),target:None,enabled:false,stale:true,last_scanned_at:Some("2026-09-05T00:00:00Z".into()),last_error:Some("offline".into()),last_notice:None,session_count:0,latest_data_at:None };
     db::upsert_source(&connection,&source).unwrap();
-    source.last_scanned_at=None; source.last_error=None; source.enabled=true;
-    db::ensure_source(&connection,&source).unwrap();
     let mut settings=AppSettings::default(); settings.pricing_rules[0].cache_write_usd_per_million=0.0;
     db::save_settings(&connection,&settings).unwrap();
-    let user="00000000-0000-0000-0000-000000000001";
-    let mut state=crate::cloud_store::SyncState::default(); state.pending.insert("local:regression".into(),"version-1".into());
-    crate::cloud_store::save(&connection,user,&state).unwrap(); drop(connection);
+    drop(connection);
     let connection=db::open(&path).unwrap();
     assert_eq!(db::list_sources(&connection).unwrap()[0].last_error.as_deref(),Some("offline"));
     assert!(!db::list_sources(&connection).unwrap()[0].enabled);
     assert_eq!(db::load_settings(&connection).unwrap().pricing_rules[0].cache_write_usd_per_million,0.0);
-    assert_eq!(crate::cloud_store::load(&connection,user).unwrap().pending.len(),1);
 }
 #[test]
 fn historical_date_filter_does_not_zero_today_metric() {
@@ -481,26 +467,6 @@ fn historical_date_filter_does_not_zero_today_metric() {
     db::save_sessions(&mut connection,&[session]).unwrap();
     let data=crate::overview_for_path(&path,UsageFilter { days:1,start_date:Some("2025-01-01".into()),end_date:Some("2025-01-01".into()),source_id:None,model:None,project:None }).unwrap();
     assert_eq!(data.totals.total_tokens,0); assert_eq!(data.today_tokens,485);
-}
-
-#[test]
-fn cloud_copy_merges_without_doubling_and_rejects_a_shorter_download() {
-    use sha2::{Digest,Sha256};
-    use crate::cloud_store::{Download,merge,reconcile};
-    let root=temp(); let mut connection=db::open(&root.join("usage.sqlite3")).unwrap();
-    let user="00000000-0000-0000-0000-000000000001";
-    let key=format!("{:x}",Sha256::digest(format!("{user}:regression").as_bytes()));
-    let original=parse_session(Cursor::new(fixture()),"local","Local","local").unwrap();
-    merge(&mut connection,user,vec![Download{prefer_local:false,session_key:key.clone(),session:original.clone()}]).unwrap();
-    let mut local=original.clone();
-    local.turns.as_mut().unwrap().iter_mut().for_each(|t|t.timestamp=t.timestamp.replace('Z',"+00:00"));
-    db::save_sessions(&mut connection,&[local.clone()]).unwrap();
-    reconcile(&mut connection).unwrap();
-    let count:i64=connection.query_row("SELECT COUNT(*) FROM sessions",[],|row|row.get(0)).unwrap();
-    assert_eq!(count,1);
-    let mut short=original.clone(); short.turns.as_mut().unwrap().truncate(1); short.token_event_count=1; short.tokens=short.turns.as_ref().unwrap()[0].tokens.clone();
-    merge(&mut connection,user,vec![Download{prefer_local:false,session_key:key,session:short}]).unwrap();
-    assert_eq!(db::get_session(&connection,"local","regression").unwrap().token_event_count,4);
 }
 
 fn activity_fixture() -> String {
@@ -581,7 +547,7 @@ fn recorded_effort_aliases_and_setting_switches_match_all_scanners() {
 }
 
 #[test]
-fn historical_effort_repair_preserves_amounts_activity_and_syncs_partial_segments() {
+fn historical_effort_repair_preserves_amounts_activity_on_partial_segments() {
     let root=temp(); let mut connection=db::open(&root.join("usage.sqlite3")).unwrap();
     let raw=parse_session(Cursor::new(effort_settings_fixture()),"remote","Remote","ssh").unwrap();
     let mut legacy=raw.clone();
@@ -596,11 +562,10 @@ fn historical_effort_repair_preserves_amounts_activity_and_syncs_partial_segment
     let repaired=db::get_session(&connection,"remote","efforts").unwrap();
     assert_eq!(repaired.tokens,before.tokens); assert_eq!(repaired.token_event_count,before.token_event_count);
     assert_eq!(repaired.estimate_microusd,before.estimate_microusd);
-    assert_ne!(repaired.sync_fingerprint,before.sync_fingerprint);
     assert_eq!(repaired.turns.as_ref().unwrap().iter().map(|turn|turn.reasoning_effort.as_str()).collect::<Vec<_>>(),["unknown","high","max","unknown","unknown","unknown","unknown"]);
     assert_eq!(connection.query_row("SELECT COUNT(*) FROM session_activity",[],|row|row.get::<_,i64>(0)).unwrap(),activity);
     db::save_sessions(&mut connection,&[prefix]).unwrap();
-    assert_eq!(db::get_session(&connection,"remote","efforts").unwrap().sync_fingerprint,repaired.sync_fingerprint);
+    assert_eq!(db::get_session(&connection,"remote","efforts").unwrap().turns.unwrap()[1].reasoning_effort, "high");
     let mut missing_again=raw.clone();
     for turn in missing_again.turns.as_mut().unwrap() { turn.reasoning_effort="unknown".into(); }
     db::save_sessions(&mut connection,&[missing_again]).unwrap();
@@ -642,7 +607,6 @@ fn historical_effort_repair_ignores_ambiguous_and_incomplete_evidence() {
         db::save_sessions(&mut connection,&[observation]).unwrap();
         let saved=db::get_session(&connection,"remote","efforts").unwrap();
         assert_eq!(saved.tokens,before.tokens);
-        assert_eq!(saved.sync_fingerprint,before.sync_fingerprint);
         assert!(saved.turns.unwrap().iter().all(|turn| turn.reasoning_effort=="unknown"));
     }
 }
@@ -834,147 +798,6 @@ fn disjoint_segments_merge_in_any_order_without_double_counting_same_time_reques
         db::save_sessions(&mut other,&[earlier]).unwrap();
         assert_eq!(db::get_session(&other,"local","regression").unwrap().token_event_count,3);
     }
-}
-
-#[test]
-fn downloaded_removals_survive_restart_rescan_and_cloud_to_local_reconciliation() {
-    use crate::cloud_store::{Download, merge, reconcile};
-    use sha2::{Digest,Sha256};
-    let user="00000000-0000-0000-0000-000000000001";
-    let key=format!("{:x}",Sha256::digest(format!("{user}:regression").as_bytes()));
-    let root=temp(); let path=root.join("usage.sqlite3");
-    let mut connection=db::open(&path).unwrap();
-    let old=parse_session(Cursor::new(activity_fixture()),"local","Local","local").unwrap();
-    let mut correction=old.clone();
-    let removed=correction.turns.as_mut().unwrap().remove(0);
-    correction.excluded_usage.push(UsageIdentity{timestamp:removed.timestamp.clone(),total_tokens:removed.tokens.total_tokens});
-    correction.tokens=TokenBreakdown::default();
-    for (i,t) in correction.turns.as_mut().unwrap().iter_mut().enumerate(){t.ordinal=i as i64+1;correction.tokens.add_assign(&t.tokens);}
-    correction.token_event_count-=1;
-    merge(&mut connection,user,vec![Download{prefer_local:false,session_key:key.clone(),session:correction.clone()}]).unwrap();
-    db::save_sessions(&mut connection,&[old.clone()]).unwrap();
-    reconcile(&mut connection).unwrap();
-    assert_eq!(db::get_session(&connection,"local","regression").unwrap().tokens,correction.tokens);
-    assert_eq!(connection.query_row("SELECT COUNT(*) FROM sessions WHERE source_kind='cloud'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
-    let before=db::get_session(&connection,"local","regression").unwrap();
-    drop(connection);let mut connection=db::open(&path).unwrap();
-    db::save_sessions(&mut connection,&[old.clone()]).unwrap();
-    db::save_cloud_sessions(&mut connection,&[old]).unwrap();
-    let saved=db::get_session(&connection,"local","regression").unwrap();
-    assert_eq!(saved.tokens,correction.tokens);
-    assert_eq!(saved.excluded_usage.len(),1);
-    // Equal-total model/tier corrections still invalidate the upload queue.
-    let mut changed=saved.clone();changed.turns.as_mut().unwrap()[0].reasoning_effort="medium".into();
-    db::save_sessions(&mut connection,&[changed]).unwrap();
-    assert_ne!(db::get_session(&connection,"local","regression").unwrap().sync_fingerprint,before.sync_fingerprint);
-}
-
-#[test]
-fn download_before_upload_keeps_unsent_raw_model_and_fast_corrections() {
-    use crate::cloud_store::{Download,merge};
-    use sha2::{Digest,Sha256};
-    let user="00000000-0000-0000-0000-000000000001";
-    let key=format!("{:x}",Sha256::digest(format!("{user}:regression").as_bytes()));
-    let root=temp();let mut connection=db::open(&root.join("usage.sqlite3")).unwrap();
-    let mut current=parse_session(Cursor::new(fixture()),"local","Local","local").unwrap();
-    current.turns.as_mut().unwrap()[0].service_tier="priority".into();
-    db::save_sessions(&mut connection,&[current.clone()]).unwrap();
-    let mut stale=current.clone();stale.turns.as_mut().unwrap()[0].service_tier="default".into();
-    stale.turns.as_mut().unwrap()[0].model="older-model".into();
-    for (version,prefer_local) in [(5,false),(6,true)] {
-        stale.aggregation_version=version;
-        merge(&mut connection,user,vec![Download{prefer_local,session_key:key.clone(),session:stale.clone()}]).unwrap();
-        let saved=db::get_session(&connection,"local","regression").unwrap();
-        assert_eq!(saved.turns.as_ref().unwrap()[0].service_tier,"priority");
-        assert_eq!(saved.turns.as_ref().unwrap()[0].model,current.turns.as_ref().unwrap()[0].model);
-    }
-    // The cloud can insert an earlier request while local metadata stays newer.
-    // Preserving a local turn must not copy its old ordinal onto a different row.
-    let mut expanded=stale.clone();expanded.aggregation_version=5;
-    let mut earlier=expanded.turns.as_ref().unwrap()[0].clone();earlier.timestamp="2026-09-05T01:00:00.500Z".into();
-    expanded.turns.as_mut().unwrap().insert(0,earlier);
-    expanded.tokens=TokenBreakdown::default();expanded.token_event_count+=1;
-    for (i,t) in expanded.turns.as_mut().unwrap().iter_mut().enumerate(){t.ordinal=i as i64+1;expanded.tokens.add_assign(&t.tokens);}
-    merge(&mut connection,user,vec![Download{prefer_local:true,session_key:key.clone(),session:expanded}]).unwrap();
-    let merged=db::get_session(&connection,"local","regression").unwrap();
-    assert_eq!(merged.token_event_count,5);
-    assert_eq!(merged.turns.unwrap()[1].service_tier,"priority");
-    let fresh=temp();let mut fresh=db::open(&fresh.join("usage.sqlite3")).unwrap();
-    merge(&mut fresh,user,vec![Download{prefer_local:false,session_key:key.clone(),session:current}]).unwrap();
-    stale.aggregation_version=5;
-    merge(&mut fresh,user,vec![Download{prefer_local:false,session_key:key.clone(),session:stale}]).unwrap();
-    assert_eq!(db::get_session(&fresh,&format!("cloud:{user}"),&key).unwrap().turns.unwrap()[0].service_tier,"priority");
-}
-
-fn corrected_cloud_copy(mut session: SessionAggregate) -> SessionAggregate {
-    session.activity = SessionActivity::default();
-    let tokens = &mut session.turns.as_mut().unwrap()[0].tokens;
-    tokens.input_tokens -= 30;
-    tokens.cached_input_tokens = 20;
-    tokens.output_tokens = 30;
-    tokens.reasoning_output_tokens = 10;
-    session.tokens = TokenBreakdown::default();
-    for turn in session.turns.as_ref().unwrap() { session.tokens.add_assign(&turn.tokens); }
-    session
-}
-
-#[test]
-fn cloud_download_preserves_local_and_ssh_activity_when_unchanged_logs_are_skipped() {
-    use crate::cloud_store::{Download, merge};
-    use sha2::{Digest, Sha256};
-    let user = "00000000-0000-0000-0000-000000000001";
-    let key = format!("{:x}", Sha256::digest(format!("{user}:regression").as_bytes()));
-    for kind in ["local", "ssh"] {
-        let root = temp();
-        std::fs::create_dir(root.join("sessions")).unwrap();
-        std::fs::write(root.join("sessions/activity.jsonl"), activity_fixture()).unwrap();
-        let mut connection = db::open(&root.join("usage.sqlite3")).unwrap();
-        let source = if kind == "local" { "local" } else { "ssh-test" };
-        if kind == "local" {
-            crate::scanner::scan_local(&root, &mut connection, false).unwrap();
-        } else {
-            let session = parse_session(Cursor::new(activity_fixture()), source, "Remote", kind).unwrap();
-            db::save_sessions(&mut connection, &[session]).unwrap();
-        }
-        let activity = activity_rows(&connection);
-        assert_eq!(activity, vec![("effort".into(), "high".into(), 1), ("plugin".into(), "Browser".into(), 1), ("skill".into(), "frontend-craft".into(), 1)]);
-        let original = db::get_session(&connection, source, "regression").unwrap();
-        let incoming = corrected_cloud_copy(original.clone());
-        assert_eq!(incoming.tokens.total_tokens, original.tokens.total_tokens);
-        for _ in 0..2 {
-            merge(&mut connection, user, vec![Download { prefer_local: false, session_key: key.clone(), session: incoming.clone() }]).unwrap();
-            assert_eq!(db::get_session(&connection, source, "regression").unwrap().tokens, incoming.tokens);
-            assert_eq!(activity_rows(&connection), activity);
-        }
-        if kind == "local" {
-            assert_eq!(crate::scanner::scan_local(&root, &mut connection, false).unwrap().scanned_sessions, 0);
-            assert_eq!(activity_rows(&connection), activity);
-        }
-        // An authoritative log scan may still remove activity that no longer exists.
-        db::save_sessions(&mut connection, &[incoming]).unwrap();
-        assert!(activity_rows(&connection).is_empty());
-    }
-}
-
-#[test]
-fn cloud_reconciliation_preserves_activity_when_a_download_later_becomes_local() {
-    use crate::cloud_store::{Download, merge, reconcile};
-    use sha2::{Digest, Sha256};
-    let root = temp();
-    let mut connection = db::open(&root.join("usage.sqlite3")).unwrap();
-    let user = "00000000-0000-0000-0000-000000000001";
-    let key = format!("{:x}", Sha256::digest(format!("{user}:regression").as_bytes()));
-    let local = parse_session(Cursor::new(activity_fixture()), "local", "Local", "local").unwrap();
-    let incoming = corrected_cloud_copy(local.clone());
-    merge(&mut connection, user, vec![Download { prefer_local: false, session_key: key, session: incoming.clone() }]).unwrap();
-    assert!(activity_rows(&connection).is_empty());
-    db::save_sessions(&mut connection, &[local]).unwrap();
-    let activity = activity_rows(&connection);
-    assert_eq!(activity.len(), 3);
-    reconcile(&mut connection).unwrap();
-    assert_eq!(activity_rows(&connection), activity);
-    assert_eq!(db::get_session(&connection, "local", "regression").unwrap().tokens, incoming.tokens);
-    assert_eq!(connection.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
 }
 
 #[cfg(windows)]

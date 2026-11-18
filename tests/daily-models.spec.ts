@@ -141,9 +141,8 @@ test("comparison shares daily selection and keeps unknown estimates out of the c
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {
       invoke: async (command: string, args?: { filter?: { startDate?: string; endDate?: string } }) => {
         if (command === "get_overview") return args?.filter?.startDate === args?.filter?.endDate ? fixtures.days[args!.filter!.startDate!] : fixtures.all;
-        if (command === "get_settings") return { pollMinutes: 15, cloudEnabled: false, autoUpdatePricing: false, sshSources: [], pricingRules: [] };
+        if (command === "get_settings") return { pollMinutes: 15, autoUpdatePricing: false, sshSources: [], pricingRules: [] };
         if (command === "scan_sources") return { sources: fixtures.all.sources, scannedSessions: 3, scannedAt: "2026-10-16T01:00:00Z" };
-        if (command === "plugin:deep-link|get_current") return [];
         return null;
       }, transformCallback: () => 0, unregisterCallback: () => {},
     } });

@@ -38,7 +38,6 @@ echo [INFO] Cargo output: %CARGO_TARGET_DIR%
 set "STAGE_DIR=%TEMP%\CodexUsageAnalytics-build-!RANDOM!!RANDOM!"
 set "SOURCE_DIR=%~dp0"
 set "SOURCE_DIR=!SOURCE_DIR:~0,-1!"
-set "CODEX_USAGE_ENV_DIR=!SOURCE_DIR!"
 echo [INFO] Staging source outside the protected Documents folder...
 mkdir "%STAGE_DIR%"
 robocopy "!SOURCE_DIR!" "%STAGE_DIR%" /E /NFL /NDL /NJH /NJS /NP /XD node_modules .pnpm-store work outputs .git target test-results playwright-report /XF ".env" ".env.local" >nul

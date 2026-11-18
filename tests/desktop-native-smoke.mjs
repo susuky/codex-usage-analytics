@@ -22,7 +22,7 @@ const codex = join(root, 'codex');
 mkdirSync(join(codex, 'sessions'), {recursive:true});
 const db = new DatabaseSync(dbPath);
 db.exec('create table settings(key text primary key,value text not null)');
-db.prepare('insert into settings values(?,?)').run('app', JSON.stringify({codexHome:codex,sshSources:[],cloudEnabled:false,pollMinutes:15,autoUpdatePricing:false}));
+db.prepare('insert into settings values(?,?)').run('app', JSON.stringify({codexHome:codex,sshSources:[],pollMinutes:15,autoUpdatePricing:false}));
 db.close();
 const server = createServer();
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));

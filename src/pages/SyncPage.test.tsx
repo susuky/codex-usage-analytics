@@ -7,7 +7,6 @@ import type { OverviewData } from "../types";
 
 const { state } = vi.hoisted(() => ({ state: { data: null as OverviewData | null, pollMinutes: 15 } }));
 vi.mock("../lib/data", () => ({ useUsageData: () => ({ ...state, scanning: false, refresh: vi.fn() }) }));
-vi.mock("../lib/cloud", () => ({ useCloud: () => ({ status: { enabled: false, signedIn: false, pendingRows: 0 }, syncNow: vi.fn() }) }));
 vi.mock("../components/PageHeader", () => ({ PageHeader: ({ title }: { title: string }) => <h1>{title}</h1> }));
 
 beforeEach(() => { state.data = buildDemoOverview(); state.pollMinutes = 15; });

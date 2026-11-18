@@ -60,7 +60,6 @@ export function DataProvider({ children }: { children: ReactNode }) {
       try {
         await scanSources(forceFull);
         await loadRef.current();
-        window.dispatchEvent(new Event("usage-scanned"));
       } catch (cause) {
         setScanError(cause instanceof Error ? cause.message : String(cause));
       } finally {

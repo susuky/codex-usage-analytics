@@ -28,7 +28,6 @@ coverage/
 # Environment, credentials, and machine-specific configuration
 .env
 .env.*
-!.env.example
 *.pfx
 *.p12
 *.pem

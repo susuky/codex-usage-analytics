@@ -6,7 +6,6 @@ import type { AppSettings, PricingStatus } from "../types";
 
 vi.mock("../components/PageHeader", () => ({ PageHeader: () => <h1>設定</h1> }));
 vi.mock("../lib/data", () => ({ useUsageData: () => ({ data: null }) }));
-vi.mock("../lib/cloud", () => ({ useCloud: () => ({ status: { configured: false, signedIn: false } }) }));
 vi.mock("../lib/api", async importOriginal => {
   const actual = await importOriginal<typeof import("../lib/api")>();
   return { ...actual, getSettings: vi.fn(), getPricingStatus: vi.fn(), refreshPricing: vi.fn(), saveSettings: vi.fn() };
@@ -17,7 +16,7 @@ let status: PricingStatus;
 afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
-  saved = { codexHome: "", sshSources: [], cloudEnabled: false, pollMinutes: 15, autoUpdatePricing: true, pricingRules: structuredClone(defaultPricingRules) };
+  saved = { codexHome: "", sshSources: [], pollMinutes: 15, autoUpdatePricing: true, pricingRules: structuredClone(defaultPricingRules) };
   status = { checkedAt: null, updatedAt: null, lastError: null, officialRules: structuredClone(defaultPricingRules) };
   vi.mocked(getSettings).mockImplementation(async () => structuredClone(saved));
   vi.mocked(getPricingStatus).mockImplementation(async () => structuredClone(status));

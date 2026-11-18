@@ -14,10 +14,6 @@ This portable build does not install files or register an uninstaller.
 Application statistics remain in the standard per-user Tauri application-data
 directory so upgrades do not erase usage history.
 
-Supabase Magic Link deep-link callbacks require the installed version because
-the codex-usage:// protocol must be registered with Windows. Local and SSH
-analytics work normally in the portable build.
-
 更新免安裝版：
 - 從 0.3.22 起，在「設定 → 程式更新」選擇新版的 CodexUsageAnalytics.exe。
 - 程式會在原位置完成更新並重新啟動；開機啟動設定和使用紀錄會保留。

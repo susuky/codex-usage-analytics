@@ -251,7 +251,6 @@ function Convert-Session([string]$Path) {
     }
     [ordered]@{
         scanComplete = $scanComplete
-        aggregationVersion = 6
         sessionId = $sessionId; sourceId = ''; sourceName = ''; sourceKind = 'ssh'
         importIdentity = $(if ($null -ne $historyStart -or $legacySessionId -ne $sessionId) { @{ legacySessionId = $legacySessionId; excludedTurns = [object[]]$excludedTurns.ToArray() } } else { $null })
         project = $project; model = $model; startedAt = $startedAt; endedAt = $endedAt; origin = $origin

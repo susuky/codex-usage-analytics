@@ -108,9 +108,8 @@ async function mockDesktop(page: Page) {
           return result;
         }
         if (command === "get_session_detail") return sessions.find(item => item.sourceId === args?.sourceId && item.sessionId === args?.sessionId);
-        if (command === "get_settings") return { pollMinutes: 15, cloudEnabled: false, autoUpdatePricing: false, sshSources: [], pricingRules: [] };
+        if (command === "get_settings") return { pollMinutes: 15, autoUpdatePricing: false, sshSources: [], pricingRules: [] };
         if (command === "scan_sources") return { sources: overview(range).sources, scannedSessions: sessions.length, scannedAt: "2026-10-16T02:00:00Z" };
-        if (command === "plugin:deep-link|get_current") return [];
         return null;
       },
       transformCallback: () => 0, unregisterCallback: () => {},

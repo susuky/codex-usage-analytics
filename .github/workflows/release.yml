@@ -34,9 +34,6 @@ jobs:
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
-          VITE_AUTH_CALLBACK_URL: ${{ vars.VITE_AUTH_CALLBACK_URL }}
         with:
           tagName: app-v__VERSION__
           releaseName: Codex 用量分析 v__VERSION__

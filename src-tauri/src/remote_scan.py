@@ -243,7 +243,6 @@ def parse_file(path):
     totals = {key: sum(turn["tokens"][key] for turn in turns) for key in totals}
     return {
         "scanComplete": scan_complete,
-        "aggregationVersion": 6,
         "sessionId": session_id,
         "importIdentity": {"legacySessionId": legacy_session_id, "excludedTurns": excluded_turns}
             if history_start is not None or legacy_session_id != session_id else None,

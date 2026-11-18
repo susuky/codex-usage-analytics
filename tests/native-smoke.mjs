@@ -29,7 +29,7 @@ if(process.argv[3]) {
 const db=new DatabaseSync(path);
 const originalTurns=process.argv[3]?db.prepare('select count(*) n from turns').get().n:0;
 db.exec('create table if not exists settings(key text primary key,value text not null)');
-db.prepare('insert into settings values(?,?) on conflict(key) do update set value=excluded.value').run('app',JSON.stringify({codexHome:join(root,'codex'),sshTarget:'',sshEnabled:false,sshSources:[],cloudEnabled:false,pollMinutes:15}));
+db.prepare('insert into settings values(?,?) on conflict(key) do update set value=excluded.value').run('app',JSON.stringify({codexHome:join(root,'codex'),sshTarget:'',sshEnabled:false,sshSources:[],pollMinutes:15}));
 db.close();
 const socket=createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;await new Promise(r=>socket.close(r));
 const softwareRendering=process.env.CODEX_USAGE_SMOKE_SOFTWARE==='1';

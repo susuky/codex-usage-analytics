@@ -1,12 +1,10 @@
 use std::collections::HashSet;
 use rusqlite::{params, Connection, OptionalExtension};
-use crate::{db, models::{SessionAggregate, TokenBreakdown, UsageIdentity}, pricing};
+use crate::{db, models::{SessionAggregate, TokenBreakdown}, pricing};
 
 const REVISION: &str = "data_revision:subagent-identity-v1";
 
 pub fn initialize(connection: &Connection) -> Result<(), String> {
-    // Keep only aggregate evidence. It also prevents a stale cloud snapshot from
-    // restoring a request under its former owner after the correction.
     connection.execute_batch("CREATE TABLE IF NOT EXISTS usage_attribution_repairs (
         source_id TEXT NOT NULL, previous_session_id TEXT NOT NULL,
         timestamp TEXT NOT NULL, total_tokens INTEGER NOT NULL, owner_session_id TEXT,
@@ -25,27 +23,6 @@ pub fn initialize(connection: &Connection) -> Result<(), String> {
 
 fn stamp(value: &str) -> String {
     chrono::DateTime::parse_from_rfc3339(value).map(|v| v.timestamp_micros().to_string()).unwrap_or_else(|_| value.to_string())
-}
-
-pub fn exclusions(connection: &Connection, source: &str, session: &str) -> Result<Vec<UsageIdentity>, String> {
-    let mut query = connection.prepare("SELECT timestamp,total_tokens FROM usage_attribution_repairs WHERE source_id=?1 AND previous_session_id=?2 AND (owner_session_id IS NULL OR owner_session_id<>?2) ORDER BY timestamp,total_tokens").map_err(|e| e.to_string())?;
-    let rows = query.query_map(params![source,session], |row| {
-        let raw: String = row.get(0)?;
-        let timestamp = raw.parse::<i64>().ok().and_then(chrono::DateTime::from_timestamp_micros)
-            .map(|date| date.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)).unwrap_or(raw);
-        Ok(UsageIdentity { timestamp, total_tokens: row.get(1)? })
-    }).map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())
-}
-
-pub fn apply_exclusions(connection: &Connection, session: &SessionAggregate) -> Result<(), String> {
-    if session.excluded_usage.is_empty() { return Ok(()); }
-    for turn in &session.excluded_usage {
-        if turn.total_tokens < 0 || chrono::DateTime::parse_from_rfc3339(&turn.timestamp).is_err() { return Err("雲端修正資料無效".into()); }
-        connection.execute("INSERT OR IGNORE INTO usage_attribution_repairs VALUES(?1,?2,?3,?4,NULL)",
-            params![session.source_id,session.session_id,stamp(&turn.timestamp),turn.total_tokens]).map_err(|e| e.to_string())?;
-    }
-    clean_saved_session(connection, &session.source_id, &session.session_id)
 }
 
 fn pending_key(source: &str) -> String { format!("subagent-repair-pending:{source}") }
@@ -96,11 +73,8 @@ fn clean_saved_session(connection: &Connection, source: &str, id: &str) -> Resul
     let exists: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE source_id=?1 AND session_id=?2)", params![source,id], |r| r.get(0)).map_err(|e| e.to_string())?;
     if !exists { return Ok(()); }
     let mut saved = db::get_session(connection, source, id)?;
-    let removed = filter_reassigned_turns(connection, &mut saved)?;
-    // A tombstone must change the upload fingerprint even if this device never
-    // held the invalid observation (another device may still have it).
-    db::write_session(connection, &saved, false, false)?;
-    if removed {
+    if filter_reassigned_turns(connection, &mut saved)? {
+        db::write_session(connection, &saved, false, false)?;
         // Revisit the real parent's unchanged log after all children are known.
         set_pending(connection, source, true)?;
     }

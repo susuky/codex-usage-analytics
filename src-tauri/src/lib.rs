@@ -7,7 +7,6 @@ mod pricing_update;
 mod scanner;
 mod ssh;
 mod process;
-mod cloud_store;
 mod desktop;
 mod portable_update;
 #[cfg(test)]
@@ -16,7 +15,6 @@ mod regression_tests;
 use std::{collections::{BTreeMap, HashMap, HashSet}, path::PathBuf};
 use chrono::{DateTime, Local};
 use chrono::Utc;
-use keyring::Entry;
 use tauri::{Manager, State};
 use models::{AppSettings, DailyUsage, ModelUsage, OverviewData, ProjectDetailData, ScanResult, SessionAggregate, TokenBreakdown, UsageFilter, UsageSource};
 use pricing::is_fast_tier;
@@ -124,7 +122,6 @@ fn scan_sources_blocking(db_path: PathBuf, force_full: bool) -> Result<ScanResul
             Ok(())
         })?;
     }
-    cloud_store::reconcile(&mut connection)?;
     let sources = db::list_sources(&connection)?;
     Ok(ScanResult { sources, scanned_sessions, scanned_at })
 }
@@ -145,12 +142,6 @@ async fn test_ssh_source(target: String, codex_home: Option<String>) -> Result<S
 async fn list_sessions(state: State<'_, AppState>, filter: UsageFilter) -> Result<Vec<SessionAggregate>, String> {
     let path = state.db_path.clone();
     run_blocking(move || db::list_sessions(&db::open(&path)?, &filter)).await
-}
-
-#[tauri::command]
-async fn list_sync_sessions(state: State<'_, AppState>) -> Result<Vec<SessionAggregate>, String> {
-    let path = state.db_path.clone();
-    run_blocking(move || db::list_sync_sessions(&db::open(&path)?)).await
 }
 
 #[tauri::command]
@@ -316,40 +307,6 @@ fn open_pricing_docs() -> Result<(), String> {
     command.spawn().map(|_| ()).map_err(|error| format!("無法開啟預設瀏覽器：{error}"))
 }
 
-fn credential_entry(key: &str) -> Result<Entry, String> {
-    if key.is_empty() || key.len() > 160 || !key.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | ':' | '.')) { return Err("無效的安全儲存鍵".into()); }
-    Entry::new("codex-usage-analytics", key).map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-async fn get_sync_state(state: State<'_, AppState>, user_id: String) -> Result<cloud_store::SyncState,String> {
-    let path = state.db_path.clone();
-    run_blocking(move || cloud_store::load(&db::open(&path)?,&user_id)).await
-}
-#[tauri::command]
-async fn save_sync_state(state: State<'_, AppState>, user_id: String, sync_state: cloud_store::SyncState) -> Result<(),String> {
-    let path = state.db_path.clone();
-    run_blocking(move || cloud_store::save(&db::open(&path)?,&user_id,&sync_state)).await
-}
-#[tauri::command]
-async fn merge_cloud_sessions(state: State<'_, AppState>, user_id: String, sessions: Vec<cloud_store::Download>) -> Result<(),String> {
-    let path = state.db_path.clone();
-    run_blocking(move || cloud_store::merge(&mut db::open(&path)?,&user_id,sessions)).await
-}
-
-#[tauri::command]
-fn secure_get(key: String) -> Result<Option<String>, String> {
-    match credential_entry(&key)?.get_password() { Ok(value) => Ok(Some(value)), Err(keyring::Error::NoEntry) => Ok(None), Err(error) => Err(error.to_string()) }
-}
-
-#[tauri::command]
-fn secure_set(key: String, value: String) -> Result<(), String> { credential_entry(&key)?.set_password(&value).map_err(|error| error.to_string()) }
-
-#[tauri::command]
-fn secure_remove(key: String) -> Result<(), String> {
-    match credential_entry(&key)?.delete_credential() { Ok(()) | Err(keyring::Error::NoEntry) => Ok(()), Err(error) => Err(error.to_string()) }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     if portable_update::run_helper_if_requested() { return; }
@@ -373,7 +330,6 @@ pub fn run() {
             if !args.iter().any(|arg| arg == "--autostart") { desktop::show_main(app); }
         }))
         .plugin(window_state.build())
-        .plugin(tauri_plugin_deep_link::init())
         .on_window_event(desktop::on_window_event)
         .setup(|app| {
             let db_path = if let Some(path) = std::env::var_os("CODEX_USAGE_DB_PATH") {
@@ -386,12 +342,10 @@ pub fn run() {
             // commands, never on the native window's event thread.
             app.manage(AppState { db_path });
             desktop::setup(app)?;
-            #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
-            { use tauri_plugin_deep_link::DeepLinkExt; app.deep_link().register_all()?; }
             portable_update::on_app_ready()?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![scan_sources, test_ssh_source, list_sessions, list_sync_sessions, get_session_detail, get_overview, get_project_detail, get_settings, save_settings, get_pricing_status, refresh_pricing, open_pricing_docs, secure_get, secure_set, secure_remove, get_sync_state, save_sync_state, merge_cloud_sessions, desktop::get_desktop_preferences, desktop::save_desktop_preferences, portable_update::update_portable_app])
+        .invoke_handler(tauri::generate_handler![scan_sources, test_ssh_source, list_sessions, get_session_detail, get_overview, get_project_detail, get_settings, save_settings, get_pricing_status, refresh_pricing, open_pricing_docs, desktop::get_desktop_preferences, desktop::save_desktop_preferences, portable_update::update_portable_app])
         .run(context)
         .expect("error while running Codex usage analytics");
 }

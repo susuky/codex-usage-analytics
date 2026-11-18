@@ -1,6 +1,6 @@
 [package]
 name = "codex-usage-analytics"
-version = "0.3.23"
+version = "0.3.24"
 description = "Local-first Codex token usage analytics"
 authors = ["Codex Usage Analytics contributors"]
 edition = "2021"
@@ -13,10 +13,9 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-deep-link = "2"
 tauri-plugin-window-state = "=2.4.1"
 auto-launch = "=0.5.0"
-tauri-plugin-single-instance = { version = "=2.4.3", features = ["deep-link"] }
+tauri-plugin-single-instance = "=2.4.3"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -24,7 +23,6 @@ chrono = { version = "0.4", features = ["serde"] }
 rusqlite = { version = "0.37", features = ["bundled", "chrono"] }
 walkdir = "2"
 dirs = "6"
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 base64 = "0.22"
 sha2 = "0.10"
 

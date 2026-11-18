@@ -1,7 +1,7 @@
 {
   "name": "codex-usage-analytics",
   "private": true,
-  "version": "0.3.23",
+  "version": "0.3.24",
   "type": "module",
   "scripts": {
     "dev": "vite --configLoader runner",
@@ -13,9 +13,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.57.4",
     "@tauri-apps/api": "^2.8.0",
-    "@tauri-apps/plugin-deep-link": "^2.4.3",
     "lucide-react": "^0.544.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
@@ -23,7 +21,6 @@
     "recharts": "^3.2.1"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.5.8",
     "@playwright/test": "^1.55.0",
     "@tauri-apps/cli": "^2.8.4",
     "@testing-library/jest-dom": "6.9.1",

@@ -24,8 +24,7 @@ async function openDetail(page: Page, session: SessionAggregate) {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {
       invoke: async (command: string) => {
         if (command === "get_session_detail") return session;
-        if (command === "get_settings") return { pollMinutes: 15, cloudEnabled: false };
-        if (command === "plugin:deep-link|get_current") return [];
+        if (command === "get_settings") return { pollMinutes: 15 };
         return null;
       },
       transformCallback: () => 0, unregisterCallback: () => {},

@@ -281,8 +281,6 @@ pub fn parse_session<R: BufRead>(reader: R, source_id: &str, source_name: &str, 
     for turn in &turns { totals.add_assign(&turn.tokens); }
     let (estimate_microusd, unpriced_turn_count, unpriced_tokens) = summarize_session_estimate(&turns, totals.total_tokens);
     Ok(SessionAggregate {
-        aggregation_version: 6,
-        sync_fingerprint: String::new(), excluded_usage: Vec::new(),
         scan_complete,
         import_identity: (history_start.is_some() || legacy_session_id != session_id).then_some(crate::models::ImportIdentity { legacy_session_id, excluded_turns }),
         session_id, source_id: source_id.into(), source_name: source_name.into(), source_kind: source_kind.into(),
