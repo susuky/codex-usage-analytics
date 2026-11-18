@@ -76,7 +76,7 @@ test("activity page reports skills plugins and reasoning effort", async ({ page 
   await expect(page.getByText("快速模式請求", { exact: true })).toBeVisible();
   const requests = page.locator("section").filter({ has: page.getByRole("heading", { name: "模型請求次數", exact: true }) });
   await expect(requests.locator("strong")).toHaveText("12 次");
-  await expect(requests).toContainText("標準與快速模式每次都算 1 次");
+  await expect(requests).toContainText("各速度模式的請求每次都算 1 次");
   await expect(page.getByText("快速模式額度", { exact: true })).toHaveCount(0);
 });
 

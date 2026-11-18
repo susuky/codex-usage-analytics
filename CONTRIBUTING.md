@@ -38,6 +38,7 @@ Windows 成品可執行隔離的原生煙霧測試：
 ```sh
 node tests/native-smoke.mjs outputs/<成品目錄>/CodexUsageAnalytics.exe
 node tests/desktop-native-smoke.mjs outputs/<成品目錄>/CodexUsageAnalytics.exe
+node tests/portable-update-native-smoke.mjs outputs/<成品目錄>/CodexUsageAnalytics.exe
 ```
 
 腳本建立暫存資料庫與人工紀錄，關閉 SSH／雲端，檢查掃描、單日模型分布、設定、價格、視窗操作與重新啟動後的偏好。它需要 Node.js 22.16+ 或 24，並連線下載官方價格；不更改日常使用資料，也不等於安裝包、真實遠端或登入驗證。

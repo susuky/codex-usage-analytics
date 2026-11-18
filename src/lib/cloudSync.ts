@@ -31,7 +31,7 @@ export interface SessionRow extends TokenRow {
   base_revision?: string | null;
 }
 export interface TurnRow extends TokenRow {
-  turn_ordinal: number; occurred_at: string; model: string; service_tier: "default" | "priority";
+  turn_ordinal: number; occurred_at: string; model: string; service_tier: TurnUsage["serviceTier"];
   reasoning_effort: string; estimate_microusd: number | null;
 }
 export interface CloudSnapshot { session: SessionRow; turns: TurnRow[] }

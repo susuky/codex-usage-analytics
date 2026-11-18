@@ -10,17 +10,6 @@ const PRICING_REVISION_KEY: &str = "data_revision:official-pricing-v2";
 const TOKEN_BREAKDOWN_REVISION_KEY: &str = "data_revision:token-breakdown-v2";
 static OPEN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-fn merge_missing_default_pricing_rules(settings: &mut AppSettings) -> bool {
-    let mut changed = false;
-    for default_rule in default_pricing_rules() {
-        if !settings.pricing_rules.iter().any(|rule| rule.model.eq_ignore_ascii_case(&default_rule.model)) {
-            settings.pricing_rules.push(default_rule);
-            changed = true;
-        }
-    }
-    changed
-}
-
 fn period_start(days: i64) -> String {
     let first_date = Local::now().date_naive() - Duration::days(days.max(1) - 1);
     let midnight = first_date.and_hms_opt(0, 0, 0).expect("valid midnight");
@@ -188,15 +177,40 @@ pub fn open(path: &Path) -> Result<Connection, String> {
         [PRICING_REVISION_KEY],
         |row| row.get(0),
     ).optional().map_err(|error| error.to_string())?;
-    if pricing_revision.as_deref() != Some("3") {
-        let mut settings = load_settings(&connection)?;
-        merge_missing_default_pricing_rules(&mut settings);
-        save_settings(&connection, &settings)?;
-        reprice_all_sessions(&mut connection, &settings.pricing_rules)?;
-        connection.execute(
-            "INSERT INTO settings(key,value) VALUES(?1,'3') ON CONFLICT(key) DO UPDATE SET value='3'",
-            [PRICING_REVISION_KEY],
-        ).map_err(|error| error.to_string())?;
+    if pricing_revision.as_deref() != Some("5") {
+        let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
+        let mut settings = load_settings(&tx)?;
+        let mut status = crate::pricing_update::load_status(&tx)?;
+        let had_catalog = status.updated_at.is_some();
+        for rule in default_pricing_rules().into_iter().filter(|r| !crate::pricing::is_non_billable_model(&r.model)) {
+            let matches = |item: &PricingRule| item.model.trim().eq_ignore_ascii_case(&rule.model);
+            let official = status.official_rules.iter_mut().find(|item| matches(item));
+            let had_official = had_catalog && official.is_some();
+            let introduced = match pricing_revision.as_deref() {
+                Some("3") => rule.model == "gpt-6.1-terra" || rule.ultrafast_multiplier.is_some(),
+                Some("4") => rule.ultrafast_multiplier.is_some(),
+                _ => true,
+            };
+            if !introduced { continue; }
+            if let Some(current) = settings.pricing_rules.iter_mut().find(|item| matches(item)) {
+                current.ultrafast_multiplier = current.ultrafast_multiplier.or(rule.ultrafast_multiplier);
+            } else if !had_official {
+                settings.pricing_rules.push(rule.clone());
+            }
+            if let Some(previous) = official {
+                previous.ultrafast_multiplier = previous.ultrafast_multiplier.or(rule.ultrafast_multiplier);
+            } else {
+                status.official_rules.push(rule);
+            }
+        }
+        save_settings(&tx, &settings)?;
+        if had_catalog || status.checked_at.is_some() { crate::pricing_update::save_status(&tx, &status)?; }
+        reprice_in_transaction(&tx, &settings.pricing_rules)?;
+        // Earlier parsers saved Ultrafast as Standard. Re-read sources once on upgrade.
+        tx.execute("DELETE FROM file_checkpoints", []).map_err(|e| e.to_string())?;
+        tx.execute("UPDATE sources SET last_scanned_at=NULL WHERE kind IN ('local','ssh')", []).map_err(|e| e.to_string())?;
+        tx.execute("INSERT OR REPLACE INTO settings(key,value) VALUES(?1,'5')", [PRICING_REVISION_KEY]).map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
     }
     let token_breakdown_revision: Option<String> = connection.query_row(
         "SELECT value FROM settings WHERE key=?1",
@@ -295,11 +309,11 @@ pub fn save_cloud_sessions(connection: &mut Connection, sessions: &[SessionAggre
     save_sessions_with_activity(connection, sessions, false)
 }
 
-fn reconcile_recorded_efforts(connection: &Connection, current: &mut SessionAggregate) -> Result<(), String> {
+fn reconcile_turn_settings(connection: &Connection, current: &mut SessionAggregate, rules: &[PricingRule]) -> Result<(), String> {
     let Some(incoming) = current.turns.as_mut() else { return Ok(()) };
     let missing = |effort: &str| effort.trim().is_empty() || effort.eq_ignore_ascii_case("unknown");
-    if !incoming.iter().any(|turn| missing(&turn.reasoning_effort)) {
-        let has_missing: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM turns WHERE source_id=?1 AND session_id=?2 AND (TRIM(reasoning_effort)='' OR reasoning_effort='unknown'))", params![current.source_id,current.session_id], |row| row.get(0)).map_err(|e| e.to_string())?;
+    if !incoming.iter().any(|turn| missing(&turn.reasoning_effort) || turn.service_tier == "ultrafast") {
+        let has_missing: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM turns WHERE source_id=?1 AND session_id=?2 AND (TRIM(reasoning_effort)='' OR reasoning_effort='unknown' OR service_tier='ultrafast'))", params![current.source_id,current.session_id], |row| row.get(0)).map_err(|e| e.to_string())?;
         if !has_missing { return Ok(()) }
     }
     let mut previous = get_session(connection, &current.source_id, &current.session_id)?;
@@ -321,6 +335,12 @@ fn reconcile_recorded_efforts(connection: &Connection, current: &mut SessionAggr
         if new_indices.get(&key) != Some(&Some(index)) { continue; }
         let Some(Some(old_index)) = old_indices.get(&key) else { continue };
         let saved = &mut previous.turns.as_mut().unwrap()[*old_index];
+        if saved.service_tier == "ultrafast" && turn.service_tier == "default" {
+            turn.service_tier = saved.service_tier.clone();
+        } else if turn.service_tier == "ultrafast" && saved.service_tier == "default" {
+            saved.service_tier = turn.service_tier.clone();
+            changed = true;
+        }
         if missing(&turn.reasoning_effort) && !missing(&saved.reasoning_effort) {
             turn.reasoning_effort = saved.reasoning_effort.clone();
         } else if missing(&saved.reasoning_effort) && !missing(&turn.reasoning_effort) {
@@ -330,7 +350,10 @@ fn reconcile_recorded_efforts(connection: &Connection, current: &mut SessionAggr
     }
     // Preserve totals/activity and refresh the normal sync fingerprint even when
     // the older source segment is subsequently retained instead of replacing it.
-    if changed { write_session(connection, &previous, false, true)?; }
+    if changed {
+        crate::pricing::reprice_session(&mut previous, rules);
+        write_session(connection, &previous, false, true)?;
+    }
     Ok(())
 }
 
@@ -348,14 +371,14 @@ fn save_sessions_with_activity(connection: &mut Connection, sessions: &[SessionA
         let mut current = session.clone();
         crate::import_repair::filter_reassigned_turns(&tx, &mut current)?;
         let mut retained_history = false;
-        crate::pricing::reprice_sessions(std::slice::from_mut(&mut current), &rules);
         if current.turns.is_none() { retained += 1; continue; }
         let existing: Option<(i64, i64, String)> = tx.query_row(
             "SELECT token_event_count,total_tokens,ended_at FROM sessions WHERE source_id=?1 AND session_id=?2",
             params![current.source_id, current.session_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional().map_err(|error| error.to_string())?;
-        if replace_activity && current.scan_complete && existing.is_some() { reconcile_recorded_efforts(&tx, &mut current)?; }
+        if replace_activity && current.scan_complete && existing.is_some() { reconcile_turn_settings(&tx, &mut current, &rules)?; }
+        crate::pricing::reprice_session(&mut current, &rules);
         let incoming_turns = current.turns.as_ref().unwrap();
         // Preserve history across resumed or archived segments in any order.
         // Conflicting observations and ambiguous cumulative deltas stay protected.
@@ -405,7 +428,7 @@ fn save_sessions_with_activity(connection: &mut Connection, sessions: &[SessionA
                 current.turns = Some(turns);
                 retained_history = true;
                 if conflicting_history { retained += 1; }
-                crate::pricing::reprice_sessions(std::slice::from_mut(&mut current), &rules);
+                crate::pricing::reprice_session(&mut current, &rules);
             } else if current.token_event_count < event_count
                 || (current.token_event_count == event_count && current.tokens.total_tokens < total_tokens)
             {
@@ -597,7 +620,7 @@ mod tests {
                 cache_rate: 0.0,
             },
         ]);
-        crate::pricing::reprice_sessions(std::slice::from_mut(&mut mixed), &default_pricing_rules());
+        crate::pricing::reprice_session(&mut mixed, &default_pricing_rules());
         save_sessions(&mut connection, &[mixed]).unwrap();
 
         let saved = get_session(&connection, "local", "stable-session").unwrap();
@@ -702,6 +725,79 @@ mod tests {
         assert!(upgraded.pricing_rules.iter().any(|rule| rule.model == "gpt-5.5"));
         assert!(upgraded.pricing_rules.iter().any(|rule| rule.model == "gpt-5.4"));
         assert!(upgraded.pricing_rules.iter().any(|rule| rule.model == "gpt-5.3-codex"));
+        drop(connection);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
+    }
+
+    #[test]
+    fn terra_upgrade_reprices_saved_usage_and_preserves_user_settings() {
+        let path = std::env::temp_dir().join(format!(
+            "codex-usage-terra-upgrade-test-{}-{}.sqlite3",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let mut connection = open(&path).unwrap();
+        let mut settings = AppSettings::default();
+        settings.pricing_rules.retain(|rule| rule.model == "gpt-5.6-sol");
+        settings.pricing_rules[0].input_usd_per_million = 9.0;
+        settings.auto_update_pricing = false;
+        save_settings(&connection, &settings).unwrap();
+        let mut status = crate::pricing_update::PricingStatus::default();
+        status.official_rules.retain(|rule| rule.model != "gpt-6.1-terra" && !rule.model.starts_with("gpt-6.2-"));
+        for rule in &mut status.official_rules { rule.ultrafast_multiplier = None; }
+        status.updated_at = Some("2026-10-25T00:00:00Z".into());
+        connection.execute("INSERT INTO settings(key,value) VALUES('official-pricing-status-v1',?1)", [serde_json::to_string(&status).unwrap()]).unwrap();
+        let mut saved = session(1, 110_000);
+        saved.model = "gpt-6.1-terra".into();
+        saved.tokens = TokenBreakdown { input_tokens: 100_000, cached_input_tokens: 80_000, output_tokens: 10_000, total_tokens: 110_000, ..TokenBreakdown::default() };
+        let turn = &mut saved.turns.as_mut().unwrap()[0];
+        turn.model = saved.model.clone();
+        turn.tokens = saved.tokens.clone();
+        save_sessions(&mut connection, &[saved]).unwrap();
+        assert_eq!(get_session(&connection, "local", "stable-session").unwrap().estimate_microusd, None);
+        connection.execute("UPDATE settings SET value='3' WHERE key=?1", [PRICING_REVISION_KEY]).unwrap();
+        drop(connection);
+
+        let mut connection = open(&path).unwrap();
+        let mut upgraded = load_settings(&connection).unwrap();
+        assert_eq!(upgraded.pricing_rules.iter().find(|rule| rule.model == "gpt-5.6-sol").unwrap().input_usd_per_million, 9.0);
+        assert!(!upgraded.pricing_rules.iter().any(|rule| rule.model == "gpt-5.4"));
+        assert!(!upgraded.auto_update_pricing);
+        for model in ["gpt-6.2-astra", "gpt-6.2-sol"] {
+            assert_eq!(upgraded.pricing_rules.iter().find(|r| r.model == model).unwrap().ultrafast_multiplier, Some(6.0));
+        }
+        assert!(!upgraded.pricing_rules.iter().any(|r| r.model == "gpt-6-astra"));
+
+        let status = crate::pricing_update::load_status(&connection).unwrap();
+        assert_eq!(status.updated_at.as_deref(), Some("2026-10-25T00:00:00Z"));
+        let original = status.official_rules.iter().find(|rule| rule.model == "gpt-6.1-terra").unwrap();
+        assert!(crate::pricing_update::same_prices(original, upgraded.pricing_rules.iter().find(|rule| rule.model == "gpt-6.1-terra").unwrap()));
+        let mut next = status.official_rules.clone();
+        next.iter_mut().find(|rule| rule.model == "gpt-6.1-terra").unwrap().input_usd_per_million = 2.0;
+        let merged = crate::pricing_update::merge_official(&upgraded.pricing_rules, &status.official_rules, &next);
+        assert_eq!(merged.iter().find(|rule| rule.model == "gpt-6.1-terra").unwrap().input_usd_per_million, 2.0);
+        let saved = get_session(&connection, "local", "stable-session").unwrap();
+        assert_eq!(saved.estimate_microusd, Some(74_000));
+        assert_eq!(saved.turns.unwrap()[0].estimate_microusd, Some(74_000));
+
+        let terra = upgraded.pricing_rules.iter_mut().find(|rule| rule.model == "gpt-6.1-terra").unwrap();
+        terra.model = " GPT-6.1-TERRA ".into();
+        terra.input_usd_per_million = 9.0;
+        let merged = crate::pricing_update::merge_official(&upgraded.pricing_rules, &status.official_rules, &next);
+        assert_eq!(merged.iter().find(|rule| rule.model.trim().eq_ignore_ascii_case("gpt-6.1-terra")).unwrap().input_usd_per_million, 9.0);
+        save_settings(&connection, &upgraded).unwrap();
+        reprice_all_sessions(&mut connection, &upgraded.pricing_rules).unwrap();
+        connection.execute("UPDATE settings SET value='3' WHERE key=?1", [PRICING_REVISION_KEY]).unwrap();
+        drop(connection);
+
+        let connection = open(&path).unwrap();
+        let upgraded = load_settings(&connection).unwrap();
+        let terra: Vec<_> = upgraded.pricing_rules.iter().filter(|rule| rule.model.trim().eq_ignore_ascii_case("gpt-6.1-terra")).collect();
+        assert_eq!(terra.len(), 1);
+        assert_eq!(terra[0].input_usd_per_million, 9.0);
+        assert_eq!(get_session(&connection, "local", "stable-session").unwrap().estimate_microusd, Some(234_000));
         drop(connection);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
@@ -904,7 +1000,7 @@ pub fn get_activity(connection: &Connection, filter: &UsageFilter) -> Result<Act
     for row in tier_rows {
         let (tier, count, tokens) = row.map_err(|error| error.to_string())?;
         let fast = is_fast_tier(&tier);
-        *tier_counts.entry(if fast { "快速模式".into() } else { "標準模式".into() }).or_default() += count;
+        *tier_counts.entry(if tier == "ultrafast" { "Ultrafast".into() } else if fast { "快速模式".into() } else { "標準模式".into() }).or_default() += count;
         if fast { activity.fast_requests += count; activity.fast_tokens += tokens; }
     }
     activity.service_tiers = tier_counts.into_iter().map(|(name, count)| NamedCount { name, count }).collect();
@@ -928,24 +1024,21 @@ pub fn reprice_all_sessions(connection: &mut Connection, rules: &[PricingRule]) 
 
 pub(crate) fn reprice_in_transaction(tx: &Connection, rules: &[PricingRule]) -> Result<(), String> {
     let turns = {
-        let mut statement = tx.prepare("SELECT source_id,session_id,ordinal,model,service_tier,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens FROM turns").map_err(|error| error.to_string())?;
+        let mut statement = tx.prepare("SELECT source_id,session_id,ordinal,model,service_tier,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,timestamp FROM turns").map_err(|error| error.to_string())?;
         let rows = statement.query_map([], |row| Ok((
             row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?,
-            TokenBreakdown { input_tokens: row.get(5)?, cached_input_tokens: row.get(6)?, cache_write_input_tokens: row.get(7)?, output_tokens: row.get(8)?, reasoning_output_tokens: row.get(9)?, total_tokens: row.get(10)? }
+            TokenBreakdown { input_tokens: row.get(5)?, cached_input_tokens: row.get(6)?, cache_write_input_tokens: row.get(7)?, output_tokens: row.get(8)?, reasoning_output_tokens: row.get(9)?, total_tokens: row.get(10)? }, row.get::<_, String>(11)?
         ))).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
         rows
     };
-    let mut session_costs: HashMap<(String, String), (i64, i64, i64)> = HashMap::new();
-    for (source_id, session_id, ordinal, model, service_tier, tokens) in turns {
-        let estimate = estimate_with_rules_for_tier(&model, &tokens, &service_tier, rules);
+    let mut session_costs: HashMap<(String, String), (i64, i64)> = HashMap::new();
+    for (source_id, session_id, ordinal, model, service_tier, tokens, timestamp) in turns {
+        let estimate = estimate_with_rules_for_tier(&model, &tokens, &service_tier, &timestamp, rules);
         tx.execute("UPDATE turns SET estimate_microusd=?1 WHERE source_id=?2 AND session_id=?3 AND ordinal=?4", params![estimate, source_id, session_id, ordinal]).map_err(|error| error.to_string())?;
-        let item = session_costs.entry((source_id, session_id)).or_insert((0, 0, 0));
-        match estimate {
-            Some(value) => { item.0 += value; item.1 += 1; }
-            None => item.2 += 1,
-        }
+        let item = session_costs.entry((source_id, session_id)).or_default();
+        if let Some(value) = estimate { item.0 += value; item.1 += 1; }
     }
-    for ((source_id, session_id), (sum, priced_count, _unpriced_count)) in session_costs {
+    for ((source_id, session_id), (sum, priced_count)) in session_costs {
         let estimate = (priced_count > 0).then_some(sum);
         tx.execute("UPDATE sessions SET estimate_microusd=?1 WHERE source_id=?2 AND session_id=?3", params![estimate, source_id, session_id]).map_err(|error| error.to_string())?;
     }

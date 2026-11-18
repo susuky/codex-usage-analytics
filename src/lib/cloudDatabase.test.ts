@@ -27,8 +27,10 @@ it("propagates removals to a fresh device and rejects both legacy writes and con
   await account(first);
   const legacy=snapshot(3,"f".repeat(64));
   const download=async () => (await pg.query<{data:CloudSnapshot}>("select get_usage_session_v3($1,$2) data",[legacy.row.source_key,legacy.row.session_key])).rows[0].data;
+  legacy.turns[0].service_tier = "ultrafast";
   await upload(legacy);
   const before=await download();
+  expect(before.turns[0].service_tier).toBe("ultrafast");
   const corrected={row:{...legacy.row,aggregation_version:6,base_revision:before.session.sync_revision,token_event_count:2,
     input_tokens:200,total_tokens:200,estimate_microusd:800,
     excluded_usage:[{timestamp:legacy.turns[2].occurred_at,total_tokens:100}]},turns:legacy.turns.slice(0,2)};

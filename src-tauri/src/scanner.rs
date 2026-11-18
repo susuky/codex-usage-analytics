@@ -2,9 +2,9 @@ use std::{collections::HashSet, fs::File, io::{BufReader, Read}, path::Path};
 use walkdir::WalkDir;
 use sha2::{Digest, Sha256};
 use rusqlite::{Connection, OptionalExtension, params};
-use crate::{models::ScanBatch, parser::parse_session};
+use crate::{models::ScanSummary, parser::parse_session};
 
-pub fn scan_local(codex_home: &Path, connection: &mut Connection, force_full: bool) -> Result<ScanBatch, String> {
+pub fn scan_local(codex_home: &Path, connection: &mut Connection, force_full: bool) -> Result<ScanSummary, String> {
     let repairing = crate::import_repair::pending(connection, "local")?;
     let first = scan_local_once(codex_home, connection, force_full || repairing);
     if first.as_ref().map_or(true, |batch| batch.skipped_files > 0) {
@@ -22,10 +22,9 @@ pub fn scan_local(codex_home: &Path, connection: &mut Connection, force_full: bo
     first
 }
 
-fn scan_local_once(codex_home: &Path, connection: &mut Connection, force_full: bool) -> Result<ScanBatch, String> {
+fn scan_local_once(codex_home: &Path, connection: &mut Connection, force_full: bool) -> Result<ScanSummary, String> {
     let mut session_ids = HashSet::new();
     let mut retained = HashSet::new();
-    let rules = crate::db::load_settings(connection)?.pricing_rules;
     let mut skipped_files = 0;
     let mut checkpoints = Vec::new();
     let roots = [codex_home.join("sessions"), codex_home.join("archived_sessions")];
@@ -46,15 +45,12 @@ fn scan_local_once(codex_home: &Path, connection: &mut Connection, force_full: b
             else { skipped_files += 1; }
             // Different files can be disjoint continuations of the same session.
             // Persist each segment; the database merges observations by identity.
-            let mut parsed = parsed;
-            crate::pricing::reprice_sessions(std::slice::from_mut(&mut parsed), &rules);
             if crate::db::save_sessions(connection, std::slice::from_ref(&parsed))? > 0 { retained.insert(parsed.session_id.clone()); }
             // An incomplete child may be intentionally rejected before its first
-            // save; report the unreadable file without looking up a missing row.
+            // save; report the unreadable file without counting a saved session.
             if parsed.scan_complete || parsed.import_identity.is_none() { session_ids.insert(parsed.session_id); }
         }
     }
-    let sessions = session_ids.iter().map(|id| crate::db::get_session(connection, "local", id)).collect::<Result<Vec<_>,_>>()?;
     let retained_sessions = retained.len();
     // Keeping previously imported history is a completed import decision. A
     // readable, unchanged compacted log need not be retried until it changes.
@@ -64,7 +60,7 @@ fn scan_local_once(codex_home: &Path, connection: &mut Connection, force_full: b
         tx.execute("INSERT INTO file_checkpoints VALUES(?1,?2,?3) ON CONFLICT(file_key) DO UPDATE SET size=excluded.size,modified=excluded.modified", params![key,size,modified]).map_err(|e| e.to_string())?;
     }
     tx.commit().map_err(|e| e.to_string())?;
-    Ok(ScanBatch { sessions, skipped_files, retained_sessions })
+    Ok(ScanSummary { scanned_sessions: session_ids.len(), skipped_files, retained_sessions })
 }
 
 #[cfg(test)]
@@ -85,9 +81,9 @@ mod tests {
         fs::write(root.join("sessions/a.jsonl"), meta).unwrap();
         fs::write(root.join("archived_sessions/a.jsonl"), meta).unwrap();
         let mut connection = crate::db::open(&root.join("test.sqlite3")).unwrap();
-        let session_count = scan_local(&root, &mut connection, false).unwrap().sessions.len();
-        assert_eq!(scan_local(&root, &mut connection, false).unwrap().sessions.len(), 0);
-        assert_eq!(scan_local(&root, &mut connection, true).unwrap().sessions.len(), 1);
+        let session_count = scan_local(&root, &mut connection, false).unwrap().scanned_sessions;
+        assert_eq!(scan_local(&root, &mut connection, false).unwrap().scanned_sessions, 0);
+        assert_eq!(scan_local(&root, &mut connection, true).unwrap().scanned_sessions, 1);
         drop(connection);
         fs::remove_dir_all(&root).unwrap();
         assert_eq!(session_count, 1);

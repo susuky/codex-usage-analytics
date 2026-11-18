@@ -274,7 +274,7 @@ if($window -eq 0 -or -not [NativeResize]::SetWindowPos($window,[IntPtr]::Zero,80
   await page.getByRole('link',{name:'活動',exact:true}).click();
   const requests=page.locator('.request-count-panel');
   await expect(requests.locator('strong')).toHaveText('3 次');
-  await expect(requests).toContainText('標準與快速模式每次都算 1 次');
+  await expect(requests).toContainText('各速度模式的請求每次都算 1 次');
   await requests.scrollIntoViewIfNeeded();
   await page.screenshot({path:join(root,'native-request-count.png')});
   await page.getByRole('link',{name:'設定',exact:true}).click();
@@ -284,9 +284,42 @@ if($window -eq 0 -or -not [NativeResize]::SetWindowPos($window,[IntPtr]::Zero,80
   await expect(reviewRow.getByRole('button')).toHaveCount(0);
   await reviewRow.scrollIntoViewIfNeeded();
   await page.screenshot({path:join(root,'native-auto-review.png')});
+  const terraLog=[
+    {type:'session_meta',timestamp:stamp,payload:{id:'native-terra',timestamp:stamp,cwd:'C:/PRIVATE/test-project'}},
+    {type:'turn_context',timestamp:stamp,payload:{model:'gpt-6.1-terra',effort:'high'}},
+    {type:'event_msg',timestamp:stamp,payload:{type:'token_count',info:{last_token_usage:{input_tokens:100000,cached_input_tokens:80000,output_tokens:10000,total_tokens:110000}}}}
+  ];
+  writeFileSync(join(root,'codex','sessions','terra.jsonl'),terraLog.map(value=>JSON.stringify(value)).join('\n')+'\n');
+  await scan();
+  const terra=await page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('get_session_detail',{sourceId:'local',sessionId:'native-terra'}));
+  if(terra.model!=='gpt-6.1-terra' || terra.estimateMicrousd!==74000 || terra.unpricedTurnCount!==0) throw new Error('GPT-6.1 Terra usage was not recognized and priced');
+  const fastLog = [
+    {type:'session_meta',timestamp:stamp,payload:{id:'native-ultrafast',cwd:'C:/PRIVATE/test-project'}},
+    ...['gpt-6.2-astra','gpt-6.2-sol'].flatMap((model,i) => {
+      const timestamp = new Date(Date.parse(stamp) + i * 1000).toISOString();
+      return [{type:'event_msg',timestamp,payload:{type:'thread_settings_applied',thread_settings:{model,service_tier:'ultrafast'}}},
+        {type:'event_msg',timestamp,payload:{type:'token_count',info:{last_token_usage:{input_tokens:1000,cached_input_tokens:500,output_tokens:100,total_tokens:1100}}}}];
+    })
+  ];
+  writeFileSync(join(root,'codex','sessions','ultrafast.jsonl'),fastLog.map(value=>JSON.stringify(value)).join('\n')+'\n');
+  await scan();
+  const ultra=await page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('get_session_detail',{sourceId:'local',sessionId:'native-ultrafast'}));
+  const factor = Date.parse(stamp) < Date.parse('2027-03-01T08:00:00Z') ? 3 : 6;
+  expect(ultra.turns.map(turn=>[turn.model,turn.serviceTier,turn.estimateMicrousd])).toEqual([
+    ['gpt-6.2-astra','ultrafast',8200*factor],['gpt-6.2-sol','ultrafast',2050*factor]
+  ]);
+  await page.reload();
+  await page.getByRole('link',{name:'活動',exact:true}).click();
+  await expect(page.getByText('Ultrafast',{exact:true})).toBeVisible();
+  await page.screenshot({path:join(root,'ultrafast-activity.png')});
+  await page.goto(new URL('/sessions/local/native-ultrafast', page.url()).href);
+  const turnTable=page.getByRole('region',{name:'每回合用量明細'});
+  await expect(turnTable.getByText('Ultrafast',{exact:true})).toHaveCount(2);
+  await turnTable.scrollIntoViewIfNeeded();
+  await page.screenshot({path:join(root,'ultrafast-turns.png')});
   if(errors.length) throw new Error(errors.join('\n'));
   await closeNative();
-  console.log(JSON.stringify({...result,modelSwitch:'Astra and non-billable review imported; resumed suffix retained without duplication',additionalScreenshots:[join(root,'native-model-switch.png'),join(root,'native-auto-review.png')],windowControls:'maximize, restore, minimize, close passed',persistence:'normal size, maximized state, sidebar, preset and custom dates passed across two relaunches'}));
+  console.log(JSON.stringify({...result,terra:'GPT-6.1 Terra usage recognized and priced',modelSwitch:'Astra and non-billable review imported; resumed suffix retained without duplication',additionalScreenshots:[join(root,'native-model-switch.png'),join(root,'native-auto-review.png')],windowControls:'maximize, restore, minimize, close passed',persistence:'normal size, maximized state, sidebar, preset and custom dates passed across two relaunches'}));
 } finally {
   await browser?.close().catch(()=>{});
   if(child.exitCode===null)child.kill();

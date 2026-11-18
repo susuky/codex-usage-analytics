@@ -140,8 +140,8 @@ export function buildDemoOverview(remoteSources: SshSourceConfig[] = []): Overvi
     return {
       model,
       sessions: sessions.length,
-      fastRequests: sessions.flatMap((session) => session.turns ?? []).filter((turn) => turn.serviceTier === "priority").length,
-      fastTokens: sessions.flatMap((session) => session.turns ?? []).filter((turn) => turn.serviceTier === "priority").reduce((sum, turn) => sum + turn.tokens.totalTokens, 0),
+      fastRequests: sessions.flatMap((session) => session.turns ?? []).filter((turn) => (turn.serviceTier === "priority" || turn.serviceTier === "ultrafast")).length,
+      fastTokens: sessions.flatMap((session) => session.turns ?? []).filter((turn) => (turn.serviceTier === "priority" || turn.serviceTier === "ultrafast")).reduce((sum, turn) => sum + turn.tokens.totalTokens, 0),
       pricedRequests: sessions.reduce((sum, session) => sum + Math.max(0, session.tokenEventCount - session.unpricedTurnCount), 0),
       unpricedRequests: sessions.reduce((sum, session) => sum + session.unpricedTurnCount, 0),
       unpricedTokens: sessions.reduce((sum, session) => sum + session.unpricedTokens, 0),
@@ -178,7 +178,7 @@ export function buildDemoOverview(remoteSources: SshSourceConfig[] = []): Overvi
       serviceTiers: [{ name: "標準模式", count: 9 }, { name: "快速模式", count: 3 }],
       reasoningTokens: totals.reasoningOutputTokens,
       fastRequests: 3,
-      fastTokens: detailTurns.filter((turn) => turn.serviceTier === "priority").reduce((sum, turn) => sum + turn.tokens.totalTokens, 0)
+      fastTokens: detailTurns.filter((turn) => (turn.serviceTier === "priority" || turn.serviceTier === "ultrafast")).reduce((sum, turn) => sum + turn.tokens.totalTokens, 0)
     }
   };
 }

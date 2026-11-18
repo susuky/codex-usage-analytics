@@ -10,20 +10,13 @@ use std::os::windows::process::CommandExt;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-use crate::{models::{SessionAggregate, TokenBreakdown}, process::{bounded_output, bounded_stream}};
+use crate::{models::{ScanSummary, SessionAggregate, TokenBreakdown}, process::{bounded_output, bounded_stream}};
 
 const WINDOWS_OK: &[u8] = b"__CODEX_WINDOWS_OK__";
 const POSIX_OK: &[u8] = b"__CODEX_POSIX_OK__";
 const POSIX_SCAN_SCRIPT: &str = include_str!("remote_scan.py");
 const WINDOWS_SCAN_SCRIPT: &str = include_str!("remote_scan.ps1");
 const MAX_RECORD_BYTES: u64 = 32 * 1024 * 1024;
-
-#[derive(Debug, Default)]
-pub struct RemoteScanSummary {
-    pub scanned_sessions: usize,
-    pub skipped_files: usize,
-    pub retained_sessions: usize,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RemotePlatform {
@@ -246,7 +239,7 @@ pub fn scan_remote<F>(
     source_name: &str,
     modified_after: Option<&str>,
     on_session: F,
-) -> Result<RemoteScanSummary, String>
+) -> Result<ScanSummary, String>
 where F: FnMut(SessionAggregate) -> Result<usize, String> + Send,
 {
     let platform = detect_platform(target)?;
@@ -269,7 +262,7 @@ fn scan_remote_aggregates<F>(
     platform: RemotePlatform,
     modified_after: Option<&str>,
     on_session: F,
-) -> Result<RemoteScanSummary, String>
+) -> Result<ScanSummary, String>
 where F: FnMut(SessionAggregate) -> Result<usize, String> + Send,
 {
     validate_codex_home(codex_home)?;
@@ -334,7 +327,7 @@ fn valid_session(session: &SessionAggregate) -> bool {
 // Completed sessions survive a subsequent malformed record or disconnected SSH.
 fn consume_aggregates<R: BufRead, F: FnMut(SessionAggregate) -> Result<usize, String>>(
     mut reader: R, source_id: &str, source_name: &str, mut on_session: F,
-) -> Result<RemoteScanSummary, String> {
+) -> Result<ScanSummary, String> {
     let mut sessions = HashSet::new();
     let mut snapshots = HashSet::new();
     let mut retained = HashSet::new();
@@ -381,7 +374,7 @@ fn consume_aggregates<R: BufRead, F: FnMut(SessionAggregate) -> Result<usize, St
         }
     }
     let skipped = summary.ok_or_else(|| "遠端掃描未完整結束，已保留完成的統計；請重試".to_string())?;
-    Ok(RemoteScanSummary { scanned_sessions: sessions.len(), skipped_files: skipped + invalid_lines, retained_sessions: retained.len() })
+    Ok(ScanSummary { scanned_sessions: sessions.len(), skipped_files: skipped + invalid_lines, retained_sessions: retained.len() })
 }
 
 #[cfg(test)]

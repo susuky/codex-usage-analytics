@@ -9,6 +9,7 @@ mod ssh;
 mod process;
 mod cloud_store;
 mod desktop;
+mod portable_update;
 #[cfg(test)]
 mod regression_tests;
 
@@ -65,7 +66,7 @@ fn scan_sources_blocking(db_path: PathBuf, force_full: bool) -> Result<ScanResul
     local_source.last_scanned_at = db::list_sources(&connection)?.into_iter().find(|item| item.id == "local").and_then(|item| item.last_scanned_at);
     match scanner::scan_local(&codex_home(&settings)?, &mut connection, force_full) {
         Ok(batch) => {
-            scanned_sessions += batch.sessions.len() as i64;
+            scanned_sessions += batch.scanned_sessions as i64;
             update_scan_status(&mut local_source, batch.skipped_files, batch.retained_sessions, &scanned_at);
         }
         Err(error) => { local_source.stale = true; local_source.last_error = Some(error); }
@@ -102,7 +103,7 @@ fn scan_sources_blocking(db_path: PathBuf, force_full: bool) -> Result<ScanResul
                         }
                         second
                     } else { first }
-                } else { Ok(ssh::RemoteScanSummary::default()) };
+                } else { Ok(models::ScanSummary::default()) };
                 let mut count = 0;
                 match result {
                     Ok(batch) if item.enabled => {
@@ -351,6 +352,7 @@ fn secure_remove(key: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if portable_update::run_helper_if_requested() { return; }
     let mut context = tauri::generate_context!();
     if let Some(path) = std::env::var_os("CODEX_USAGE_DB_PATH") {
         context.config_mut().identifier.push_str(&format!(".test-{}", desktop::test_suffix(&PathBuf::from(path))));
@@ -386,9 +388,10 @@ pub fn run() {
             desktop::setup(app)?;
             #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
             { use tauri_plugin_deep_link::DeepLinkExt; app.deep_link().register_all()?; }
+            portable_update::on_app_ready()?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![scan_sources, test_ssh_source, list_sessions, list_sync_sessions, get_session_detail, get_overview, get_project_detail, get_settings, save_settings, get_pricing_status, refresh_pricing, open_pricing_docs, secure_get, secure_set, secure_remove, get_sync_state, save_sync_state, merge_cloud_sessions, desktop::get_desktop_preferences, desktop::save_desktop_preferences])
+        .invoke_handler(tauri::generate_handler![scan_sources, test_ssh_source, list_sessions, list_sync_sessions, get_session_detail, get_overview, get_project_detail, get_settings, save_settings, get_pricing_status, refresh_pricing, open_pricing_docs, secure_get, secure_set, secure_remove, get_sync_state, save_sync_state, merge_cloud_sessions, desktop::get_desktop_preferences, desktop::save_desktop_preferences, portable_update::update_portable_app])
         .run(context)
         .expect("error while running Codex usage analytics");
 }

@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { getDesktopPreferences, saveDesktopPreferences, type DesktopPreferences } from "../lib/desktop";
+import { getDesktopPreferences, portableUpdateSupported, saveDesktopPreferences, updatePortableApp, type DesktopPreferences } from "../lib/desktop";
 
 export function DesktopSettings() {
   const [preferences, setPreferences] = useState<DesktopPreferences | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [updateError, setUpdateError] = useState("");
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
   const load = async () => {
@@ -16,6 +18,17 @@ export function DesktopSettings() {
   };
 
   useEffect(() => { void load(); }, []);
+
+  const updateApp = async () => {
+    if (updating || !window.confirm("選取更新檔後會重新啟動程式。請先保存設定。要繼續嗎？")) return;
+    setUpdating(true);
+    setUpdateError("");
+    try {
+      await updatePortableApp();
+    } catch (cause) {
+      setUpdateError(cause instanceof Error ? cause.message : String(cause));
+    } finally { setUpdating(false); }
+  };
 
   const update = async (patch: Partial<DesktopPreferences>) => {
     if (!preferences || saving) return;
@@ -30,7 +43,7 @@ export function DesktopSettings() {
   };
 
   const disabled = loading || saving || !preferences;
-  return <section id="desktop-settings" className="settings-section" aria-labelledby="desktop-settings-title" aria-busy={loading || saving}>
+  return <><section id="desktop-settings" className="settings-section" aria-labelledby="desktop-settings-title" aria-busy={loading || saving}>
     <h2 id="desktop-settings-title">啟動與背景執行</h2>
     <label className="toggle-row">
       <span><strong>開機時自動啟動</strong><small>登入電腦後在背景啟動，可從右下角系統匣開啟。</small></span>
@@ -44,5 +57,9 @@ export function DesktopSettings() {
     {saving ? <p className="inline-status" role="status">正在保存啟動設定…</p> : null}
     {message ? <p className={`inline-status ${message.kind}`} role={message.kind === "error" ? "alert" : "status"}>{message.text}</p> : null}
     {!preferences && message ? <button className="secondary-button" disabled={loading} onClick={() => void load()}>重新讀取啟動設定</button> : null}
-  </section>;
+  </section>{portableUpdateSupported() ? <section className="settings-section" aria-labelledby="app-update-title" aria-busy={updating}>
+    <h2 id="app-update-title">程式更新</h2>
+    <button type="button" className="secondary-button" disabled={saving || updating} onClick={() => void updateApp()}>{updating ? "正在準備更新…" : "選擇更新檔"}</button>
+    {updateError ? <p className="inline-status error" role="alert">{updateError}</p> : null}
+  </section> : null}</>;
 }

@@ -180,7 +180,7 @@ def parse_file(path):
                     model = next_model
                 if settings.get("service_tier") is not None:
                     reported_tier = settings["service_tier"].strip().lower()
-                    service_tier = "priority" if reported_tier in ("priority", "fast") else "default"
+                    service_tier = {"priority": "priority", "fast": "priority", "ultrafast": "ultrafast"}.get(reported_tier, "default")
             elif kind == "event_msg" and payload.get("type") == "token_count":
                 info = payload.get("info") or {}
                 duplicate_snapshot = False

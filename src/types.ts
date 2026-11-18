@@ -13,7 +13,7 @@ export interface TurnUsage {
   ordinal: number;
   timestamp: string;
   model: string;
-  serviceTier: "default" | "priority";
+  serviceTier: "default" | "priority" | "ultrafast";
   reasoningEffort: string;
   tokens: TokenBreakdown;
   estimateMicrousd: number | null;
@@ -140,6 +140,7 @@ export interface PricingRule {
   longInputMultiplier: number;
   longOutputMultiplier: number;
   priorityMultiplier: number;
+  ultrafastMultiplier?: number;
   sourceUrl: string;
   reviewedAt: string;
   unavailableRates?: string[];

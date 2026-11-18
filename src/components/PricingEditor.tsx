@@ -177,7 +177,7 @@ function PriceDialog({ model: initialModel, original, official, rules, onSave, o
         <label className="price-model-field"><span>模型名稱</span><input ref={modelInput} aria-label="模型名稱" aria-invalid={invalidField === "model" || undefined} aria-describedby={invalidField === "model" ? `${id}-error` : undefined} value={model} placeholder="例如 my-model" disabled={saving} onChange={event => { setModel(event.target.value); clearError(); }} /></label>
         <div className="price-edit-columns"><div>
         <section className="price-base-section" aria-label="一般單價"><h3>一般單價</h3><div className="pricing-fields">{fields.filter(item => item.field !== "priorityMultiplier").map(renderField)}</div></section>
-        <div className="pricing-fields price-priority-field">{renderField(fields[4])}<p className="price-field-hint">使用 Fast / Priority 時，再套用此倍率。</p></div>
+        <div className="pricing-fields price-priority-field">{renderField(fields[4])}{basis.ultrafastMultiplier != null && <p className="price-field-hint">Ultrafast：{["gpt-6.2-astra", "gpt-6.2-sol"].includes(keyOf(model)) ? `3 倍至 2027/2/28，3/1 起 ${basis.ultrafastMultiplier} 倍（太平洋時間）` : `${basis.ultrafastMultiplier} 倍`}</p>}</div>
         </div>
         <section className="price-context-section" aria-labelledby={`${id}-context-title`}>
           <label className="price-context-toggle"><input type="checkbox" aria-label={`${name} 啟用長 context 加價`} checked={longEnabled} disabled={saving} onChange={event => { setLongEnabled(event.target.checked); clearError(); }} /><span id={`${id}-context-title`}>長 context 加價</span></label>

@@ -40,7 +40,7 @@ pub fn load_status(connection: &Connection) -> Result<PricingStatus, String> {
     raw.map(|raw| serde_json::from_str(&raw).map_err(|error| error.to_string())).unwrap_or_else(|| Ok(PricingStatus::default()))
 }
 
-fn save_status(connection: &Connection, status: &PricingStatus) -> Result<(), String> {
+pub(crate) fn save_status(connection: &Connection, status: &PricingStatus) -> Result<(), String> {
     let raw = serde_json::to_string(status).map_err(|error| error.to_string())?;
     connection.execute("INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [STATUS_KEY, &raw])
         .map_err(|error| error.to_string())?;
@@ -162,6 +162,7 @@ fn cells(line: &str) -> Vec<&str> { line.trim_matches('|').split('|').map(str::t
 pub fn parse_official(document: &str, reviewed_at: &str) -> Result<Vec<PricingRule>, String> {
     let mut standard = BTreeMap::<String, Rates>::new();
     let mut fast = BTreeMap::<String, Rates>::new();
+    let mut ultrafast = BTreeMap::<String, Rates>::new();
     let (mut family, mut tier, mut columns) = ("", "", 0);
     let mut rate_columns = [None; 8];
     let mut model_column = 0;
@@ -172,13 +173,14 @@ pub fn parse_official(document: &str, reviewed_at: &str) -> Result<Vec<PricingRu
             "Specialized models" => { family = "specialized"; tier = ""; },
             "Cyber models" | "Multimodal models" | "Finetuning" => { family = ""; tier = ""; },
             "Standard" => tier = "standard",
-            "Batch" | "Flex" | "Ultrafast" | "Ultrafast mode" => tier = "skip",
+            "Batch" | "Flex" | "Ultrafast promotion pricing data" => tier = "skip",
+            "Ultrafast" | "Ultrafast mode" | "Ultrafast list pricing data" => tier = "ultrafast",
             "Fast" | "Fast mode" => tier = "fast",
             _ => {},
         }
         if !line.starts_with('|') { columns = 0; continue; }
         let row = cells(line);
-        if !matches!(tier, "standard" | "fast") { continue; }
+        if !matches!(tier, "standard" | "fast" | "ultrafast") { continue; }
         if matches!(family, "flagship" | "specialized") && matches!(row.first(), Some(&"Model" | &"Category")) {
             columns = row.len();
             model_column = row.iter().position(|column| *column == "Model").ok_or(FORMAT_ERROR)?;
@@ -205,7 +207,7 @@ pub fn parse_official(document: &str, reviewed_at: &str) -> Result<Vec<PricingRu
         let values = rate_columns.iter().map(|column| column.map(|index| amount(row[index])).unwrap_or(Ok(None))).collect::<Result<Vec<_>, _>>()?;
         if values[0].is_none() || values[3].is_none() { return Err(FORMAT_ERROR.into()); }
         let threshold = model_cell.split("<").nth(1).and_then(|v| v.split('K').next()).and_then(|v| v.parse::<i64>().ok()).map(|v| v * 1000);
-        let target = if tier == "standard" { &mut standard } else { &mut fast };
+        let target = match tier { "standard" => &mut standard, "fast" => &mut fast, _ => &mut ultrafast };
         if target.insert(model.into(), Rates { values, threshold }).is_some() { return Err(FORMAT_ERROR.into()); }
     }
     if standard.len() < 3 || fast.is_empty() { return Err(FORMAT_ERROR.into()); }
@@ -219,7 +221,7 @@ pub fn parse_official(document: &str, reviewed_at: &str) -> Result<Vec<PricingRu
         // Prefer boundaries supplied by the current feed over bundled defaults.
         // GPT-6 model pages document a >272K input boundary, including cached input.
         let known_threshold = rates.threshold.or_else(|| find_rule(&defaults, &model).map(|rule| rule.long_context_threshold))
-            .or_else(|| matches!(model.as_str(), "gpt-6-astra" | "gpt-6.1-sol" | "gpt-6-sol" | "gpt-6-luna").then_some(272_000));
+            .or_else(|| matches!(model.as_str(), "gpt-6-sol" | "gpt-6-luna").then_some(272_000));
         // Unknown long-context boundaries cannot be safely inferred from prices.
         if long && known_threshold.is_none() { continue; }
         let mut unavailable = Vec::new();
@@ -229,22 +231,33 @@ pub fn parse_official(document: &str, reviewed_at: &str) -> Result<Vec<PricingRu
         let long_output = if long { values[7].ok_or(FORMAT_ERROR)? / output } else { 1.0 };
         // The estimator uses a common input multiplier, so reject incompatible rows.
         if long && (1..=2).any(|i| match (values[i], values[i+4]) { (Some(short), Some(long)) => (long / short - long_input).abs() > 0.00001, (None, None) => false, _ => true }) { continue; }
-        let multiplier = fast.get(&model).and_then(|rate| {
-            let ratio = rate.values[0]? / input;
-            (0..4).all(|i| match (values[i], rate.values[i]) { (Some(a), Some(b)) => (b / a - ratio).abs() < 0.00001, (None, None) => true, _ => false }).then_some(ratio)
+        let matches_ratio = |rate: &Rates, range: std::ops::Range<usize>, ratio: f64| range.into_iter().all(|i| {
+            match (values[i], rate.values[i]) {
+                (Some(a), Some(b)) => (b / a - ratio).abs() < 0.00001,
+                (None, None) => true,
+                _ => false,
+            }
         });
+        let multiplier_for = |rate: &Rates, range| {
+            let ratio = rate.values[0]? / input;
+            matches_ratio(rate, range, ratio).then_some(ratio)
+        };
+        let multiplier = fast.get(&model).and_then(|rate| multiplier_for(rate, 0..4));
         if multiplier.is_none() { unavailable.push("fast".into()); }
-        if long && fast.get(&model).is_some_and(|rate| (4..8).any(|i| match (values[i], rate.values[i]) { (Some(a), Some(b)) => (b / a - multiplier.unwrap_or(1.0)).abs() > 0.00001, (None, None) => false, _ => true })) { unavailable.push("longFast".into()); }
+        if long && fast.get(&model).zip(multiplier).is_some_and(|(rate, ratio)| !matches_ratio(rate, 4..8, ratio)) {
+            unavailable.push("longFast".into());
+        }
+        let ultrafast_multiplier = ultrafast.get(&model).and_then(|rate| multiplier_for(rate, 0..8));
         result.push(PricingRule {
             model, input_usd_per_million: input, cached_usd_per_million: values[1].unwrap_or(0.0),
             cache_write_usd_per_million: values[2].unwrap_or(0.0), output_usd_per_million: output,
             cache_write_multiplier: values[2].map(|rate| rate / input).unwrap_or(1.0),
             long_context_threshold: if long { known_threshold.unwrap() } else { 9_007_199_254_740_991 },
             long_input_multiplier: long_input, long_output_multiplier: long_output,
-            priority_multiplier: multiplier.unwrap_or(1.0), source_url: SOURCE.into(), reviewed_at: reviewed_at.into(), unavailable_rates: unavailable,
+            priority_multiplier: multiplier.unwrap_or(1.0), ultrafast_multiplier, source_url: SOURCE.into(), reviewed_at: reviewed_at.into(), unavailable_rates: unavailable,
         });
     }
-    if result.len() < 3 || result.iter().map(|r| &r.model).collect::<HashSet<_>>().len() != result.len() { return Err(FORMAT_ERROR.into()); }
+    if result.len() < 3 { return Err(FORMAT_ERROR.into()); }
     Ok(result)
 }
 
@@ -272,10 +285,28 @@ mod tests {
         assert_eq!(find_rule(&rules, "gpt-5.3-codex").unwrap().output_usd_per_million, 14.0);
         assert!(find_rule(&rules, "codex-auto-review").is_none());
         let usage = TokenBreakdown { input_tokens: 300000, cached_input_tokens: 100000, cache_write_input_tokens: 100000, output_tokens: 10000, total_tokens: 310000, ..TokenBreakdown::default() };
-        assert_eq!(estimate_with_rules_for_tier("gpt-6-astra", &usage, "fast", &rules), Some(10900000));
-        assert_eq!(estimate_with_rules_for_tier("gpt-5.5", &usage, "default", &rules), None);
+        assert_eq!(estimate_with_rules_for_tier("gpt-6-astra", &usage, "fast", "", &rules), Some(10900000));
+        assert_eq!(estimate_with_rules_for_tier("gpt-5.5", &usage, "default", "", &rules), None);
         let long_usage = TokenBreakdown { cache_write_input_tokens: 0, ..usage };
-        assert_eq!(estimate_with_rules_for_tier("gpt-5.5", &long_usage, "fast", &rules), None);
+        assert_eq!(estimate_with_rules_for_tier("gpt-5.5", &long_usage, "fast", "", &rules), None);
+    }
+
+    #[test]
+    fn ultrafast_prices_follow_the_request_time_at_the_pacific_cutover() {
+        let imported = parse_official(CURRENT_FEED, "2026-11-18").unwrap();
+        for rules in [&imported, &default_pricing_rules()] {
+            let short = TokenBreakdown { input_tokens: 1_000, cached_input_tokens: 500, output_tokens: 100, total_tokens: 1_100, ..Default::default() };
+            for (model, base) in [("gpt-6.2-astra", 8_200), ("gpt-6.2-sol", 2_050)] {
+                assert_eq!(estimate_with_rules_for_tier(model, &short, "ultrafast", "2027-03-01T07:59:59Z", rules), Some(base * 3));
+                assert_eq!(estimate_with_rules_for_tier(model, &short, "ultrafast", "2027-03-01T16:00:00+08:00", rules), Some(base * 6));
+                assert_eq!(estimate_with_rules_for_tier(model, &short, "fast", "", rules), Some(base * 2));
+                assert_eq!(estimate_with_rules_for_tier(model, &short, "ultrafast", "", rules), None);
+            }
+            let long = TokenBreakdown { input_tokens: 300_000, cached_input_tokens: 100_000, cache_write_input_tokens: 100_000, output_tokens: 10_000, total_tokens: 310_000, ..Default::default() };
+            assert_eq!(estimate_with_rules_for_tier("gpt-6.2-sol-2026-11-17", &long, "ultrafast", "2026-11-18T00:00:00Z", rules), Some(3_210_000));
+            assert_eq!(estimate_with_rules_for_tier("gpt-6.1-sol", &short, "ultrafast", "", rules), Some(12_300));
+            assert_eq!(estimate_with_rules_for_tier("gpt-6.1-terra", &short, "ultrafast", "", rules), None);
+        }
     }
 
     #[test]
@@ -310,13 +341,22 @@ mod tests {
 
     #[test]
     fn imports_reordered_columns_retention_tiers_and_compact_tables() {
-        let rules = parse_official(CURRENT_FEED, "2026-10-22").unwrap();
+        let rules = parse_official(CURRENT_FEED, "2026-10-27").unwrap();
         let astra = find_rule(&rules, "gpt-6-astra").unwrap();
         assert_eq!(astra.input_usd_per_million, 10.0);
         assert_eq!(astra.cached_usd_per_million, 1.0);
         assert_eq!(astra.cache_write_usd_per_million, 12.5);
         assert_eq!(astra.output_usd_per_million, 50.0);
         assert_eq!(astra.priority_multiplier, 2.0);
+        let terra = find_rule(&rules, "gpt-6.1-terra").unwrap();
+        assert_eq!((terra.input_usd_per_million, terra.cached_usd_per_million, terra.cache_write_usd_per_million, terra.output_usd_per_million), (1.0, 0.05, 1.25, 5.0));
+        assert_eq!((terra.long_context_threshold, terra.long_input_multiplier, terra.long_output_multiplier, terra.priority_multiplier), (272_000, 2.0, 1.5, 2.0));
+        assert!(terra.unavailable_rates.is_empty());
+        let short = TokenBreakdown { input_tokens: 100_000, cached_input_tokens: 80_000, output_tokens: 10_000, total_tokens: 110_000, ..TokenBreakdown::default() };
+        assert_eq!(estimate_with_rules_for_tier("gpt-6.1-terra", &short, "default", "", &rules), Some(74_000));
+        assert_eq!(estimate_with_rules_for_tier("gpt-6.1-terra", &short, "fast", "", &rules), Some(148_000));
+        let long = TokenBreakdown { input_tokens: 300_000, cached_input_tokens: 100_000, cache_write_input_tokens: 100_000, output_tokens: 10_000, total_tokens: 310_000, ..TokenBreakdown::default() };
+        assert_eq!(estimate_with_rules_for_tier("gpt-6.1-terra", &long, "fast", "", &rules), Some(1_070_000));
         let mini = find_rule(&rules, "gpt-5.4-mini").unwrap();
         assert_eq!(mini.input_usd_per_million, 0.75);
         assert_eq!(mini.cached_usd_per_million, 0.075);
@@ -326,11 +366,11 @@ mod tests {
         let codex = find_rule(&rules, "gpt-5.3-codex").unwrap();
         assert_eq!(codex.cached_usd_per_million, 0.175);
         assert_eq!(codex.output_usd_per_million, 14.0);
-        assert_eq!(rules.len(), 7);
+        assert_eq!(rules.len(), 10);
         let usage = TokenBreakdown { input_tokens: 300000, cached_input_tokens: 100000, cache_write_input_tokens: 100000, output_tokens: 10000, total_tokens: 310000, ..TokenBreakdown::default() };
-        assert_eq!(estimate_with_rules_for_tier("gpt-6-astra", &usage, "fast", &rules), Some(10900000));
+        assert_eq!(estimate_with_rules_for_tier("gpt-6-astra", &usage, "fast", "", &rules), Some(10900000));
         let changed_flex = CURRENT_FEED.replace("#### Flex\n\n| Model | Input | Output | Cached input |", "#### Flex\n\n| Model | Batch input | Output | Cached input |");
-        assert_eq!(parse_official(&changed_flex, "2026-10-22").unwrap(), rules);
+        assert_eq!(parse_official(&changed_flex, "2026-10-27").unwrap(), rules);
         for broken in [CURRENT_FEED.replace("Short context input", "Input tokens"), CURRENT_FEED.replace("Short context 12h write", "Short context 30m write"), CURRENT_FEED.replace("$50.00", "$NaN"), CURRENT_FEED.replace("| $50.00 |", "|")] {
             assert!(parse_official(&broken, "2026-10-22").is_err());
         }
@@ -404,6 +444,10 @@ mod tests {
         let rules = fetch_official().unwrap();
         assert!(rules.len() >= 6);
         assert!(find_rule(&rules, "gpt-6-astra").is_some());
+        assert!(find_rule(&rules, "gpt-6.1-terra").is_some());
+        for model in ["gpt-6.2-astra", "gpt-6.2-sol"] {
+            assert_eq!(find_rule(&rules, model).unwrap().ultrafast_multiplier, Some(6.0));
+        }
         println!("Fetched and validated {} official model prices", rules.len());
     }
 }

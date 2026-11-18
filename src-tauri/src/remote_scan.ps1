@@ -181,7 +181,12 @@ function Convert-Session([string]$Path) {
                 if (-not [string]::IsNullOrWhiteSpace($nextModel)) { $model = $nextModel }
                 $reportedTier = Get-Value $settings 'service_tier' $null
                 if ($null -ne $reportedTier) {
-                    $serviceTier = if (@('priority', 'fast') -contains ([string]$reportedTier).Trim().ToLowerInvariant()) { 'priority' } else { 'default' }
+                    $serviceTier = switch (([string]$reportedTier).Trim().ToLowerInvariant()) {
+                        'fast' { 'priority' }
+                        'priority' { 'priority' }
+                        'ultrafast' { 'ultrafast' }
+                        default { 'default' }
+                    }
                 }
             } elseif ($kind -eq 'event_msg' -and (Get-Value $payload 'type' '') -eq 'token_count') {
                 $info = Get-Value $payload 'info' $null

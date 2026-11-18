@@ -11,3 +11,11 @@ export async function saveDesktopPreferences(preferences: DesktopPreferences): P
   if (!("__TAURI_INTERNALS__" in window)) throw new Error("請在桌面版設定開機啟動與背景執行。");
   return invoke<DesktopPreferences>("save_desktop_preferences", { preferences });
 }
+
+export function portableUpdateSupported(): boolean {
+  return "__TAURI_INTERNALS__" in window && import.meta.env.TAURI_ENV_PLATFORM === "windows";
+}
+
+export function updatePortableApp(): Promise<void> {
+  return invoke("update_portable_app");
+}

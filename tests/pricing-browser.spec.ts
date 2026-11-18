@@ -4,12 +4,14 @@ async function seedCatalog(page: Page) {
   await page.goto("/settings");
   await page.getByRole("button", { name: "保存設定" }).click();
   await expect(page.getByText("設定已保存，既有費用已重新計算")).toBeVisible();
-  await page.evaluate(() => {
+  const count = await page.evaluate(() => {
     const settings = JSON.parse(sessionStorage.getItem("codex-usage-settings")!);
     settings.pricingRules.push(...Array.from({ length: 34 }, (_, index) => ({ ...settings.pricingRules[0], model: `custom-model-${index + 1}` })));
     sessionStorage.setItem("codex-usage-settings", JSON.stringify(settings));
+    return settings.pricingRules.length;
   });
   await page.reload();
+  return count;
 }
 
 test("all models are available immediately, global search and name sorting need no paging", async ({ page }, testInfo) => {
@@ -17,8 +19,8 @@ test("all models are available immediately, global search and name sorting need 
   page.on("pageerror", error => errors.push(error.message));
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
   await page.setViewportSize({ width: 1536, height: 1000 });
-  await seedCatalog(page);
-  await expect(page.locator(".pricing-table tbody tr")).toHaveCount(41);
+  const count = await seedCatalog(page);
+  await expect(page.locator(".pricing-table tbody tr")).toHaveCount(count);
   await expect(page.getByRole("button", { name: "下一頁模型" })).toHaveCount(0);
   const names = page.locator(".pricing-model-name");
   const allNames = await names.allTextContents();
@@ -46,6 +48,37 @@ test("all models are available immediately, global search and name sorting need 
   expect(table!.y - section!.y).toBeLessThan(235);
   await page.screenshot({ path: testInfo.outputPath("01-catalog.png") });
   expect(errors).toEqual([]);
+});
+
+test("GPT-6.1 Terra shows the official rates and long context settings", async ({ page }) => {
+  await page.goto("/settings");
+  await page.getByLabel("搜尋模型價格").fill("gpt-6.1-terra");
+  const row = page.locator(".pricing-table tbody tr");
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText("輸入 > 272K");
+  await expect(row.locator("td[data-label='輸入']")).toHaveText("1");
+  await expect(row.locator("td[data-label='快取輸入']")).toHaveText("0.05");
+  await expect(row.locator("td[data-label='輸出']")).toHaveText("5");
+  await row.getByRole("button", { name: "編輯 gpt-6.1-terra 價格" }).click();
+  await expect(page.getByLabel("gpt-6.1-terra cache writes 價格")).toHaveValue("1.25");
+  await expect(page.getByLabel("gpt-6.1-terra Priority 倍率")).toHaveValue("2");
+  await expect(page.getByLabel("gpt-6.1-terra 長 context 門檻")).toHaveValue("272000");
+});
+
+test("shows both GPT-6.2 prices and the Ultrafast promotion", async ({ page }, testInfo) => {
+  await page.goto("/settings");
+  await page.getByLabel("搜尋模型價格").fill("gpt-6.2-");
+  const rows = page.locator(".pricing-table tbody tr");
+  await expect(rows).toHaveCount(2);
+  for (const [suffix, input, output] of [["astra", "8", "40"], ["sol", "2", "10"]]) {
+    const row = rows.filter({ hasText: `gpt-6.2-${suffix}` });
+    await expect(row.locator("td[data-label='輸入']")).toHaveText(input);
+    await expect(row.locator("td[data-label='輸出']")).toHaveText(output);
+    await row.getByRole("button").click();
+    await expect(page.getByRole("dialog")).toContainText("Ultrafast：3 倍至 2027/2/28，3/1 起 6 倍");
+    if (suffix === "sol") await page.screenshot({ path: testInfo.outputPath("ultrafast-pricing.png") });
+    await page.keyboard.press("Escape");
+  }
 });
 
 test("native edit dialog blocks background focus, restores focus, and discards canceled edits", async ({ page }, testInfo) => {

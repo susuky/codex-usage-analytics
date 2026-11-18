@@ -1,3 +1,4 @@
+import bundledPricing from "./bundled-pricing.json";
 import { invoke } from "@tauri-apps/api/core";
 import { buildDemoOverview, buildDemoSources, demoSessions } from "./mockData";
 import { emptyDailyUsage, localDateKey } from "./daily";
@@ -61,15 +62,7 @@ export async function testSshSource(target: string, codexHome = ""): Promise<str
   return invoke<string>("test_ssh_source", { target, codexHome });
 }
 
-export const defaultPricingRules: PricingRule[] = [
-  { model: "gpt-5.6-sol", inputUsdPerMillion: 4, cachedUsdPerMillion: 0.4, cacheWriteUsdPerMillion: 5, outputUsdPerMillion: 20, cacheWriteMultiplier: 1.25, longContextThreshold: 272000, longInputMultiplier: 2, longOutputMultiplier: 1.5, priorityMultiplier: 2, sourceUrl: "https://developers.openai.com/api/docs/models/gpt-5.6-sol", reviewedAt: "2026-09-03" },
-  { model: "gpt-5.6-terra", inputUsdPerMillion: 2, cachedUsdPerMillion: 0.2, cacheWriteUsdPerMillion: 2.5, outputUsdPerMillion: 12, cacheWriteMultiplier: 1.25, longContextThreshold: 272000, longInputMultiplier: 2, longOutputMultiplier: 1.5, priorityMultiplier: 2, sourceUrl: "https://developers.openai.com/api/docs/models/gpt-5.6-terra", reviewedAt: "2026-09-03" },
-  { model: "gpt-5.6-luna", inputUsdPerMillion: 0.2, cachedUsdPerMillion: 0.02, cacheWriteUsdPerMillion: 0.25, outputUsdPerMillion: 1.2, cacheWriteMultiplier: 1.25, longContextThreshold: 272000, longInputMultiplier: 2, longOutputMultiplier: 1.5, priorityMultiplier: 2, sourceUrl: "https://developers.openai.com/api/docs/models/gpt-5.6-luna", reviewedAt: "2026-09-03" },
-  { model: "gpt-5.5", inputUsdPerMillion: 5, cachedUsdPerMillion: 0.5, cacheWriteUsdPerMillion: 6.25, outputUsdPerMillion: 30, cacheWriteMultiplier: 1.25, longContextThreshold: 272000, longInputMultiplier: 2, longOutputMultiplier: 1.5, priorityMultiplier: 2, sourceUrl: "https://developers.openai.com/api/docs/models/gpt-5.5", reviewedAt: "2026-09-03" },
-  { model: "gpt-5.4", inputUsdPerMillion: 2.5, cachedUsdPerMillion: 0.25, cacheWriteUsdPerMillion: 3.125, outputUsdPerMillion: 15, cacheWriteMultiplier: 1.25, longContextThreshold: 272000, longInputMultiplier: 2, longOutputMultiplier: 1.5, priorityMultiplier: 2, sourceUrl: "https://developers.openai.com/api/docs/models/gpt-5.4", reviewedAt: "2026-09-03" },
-  { model: "gpt-5.3-codex", inputUsdPerMillion: 1.75, cachedUsdPerMillion: 0.175, cacheWriteUsdPerMillion: 2.1875, outputUsdPerMillion: 14, cacheWriteMultiplier: 1.25, longContextThreshold: 400000, longInputMultiplier: 1, longOutputMultiplier: 1, priorityMultiplier: 2, sourceUrl: "https://developers.openai.com/api/docs/models/gpt-5.3-codex", reviewedAt: "2026-09-03" },
-  nonBillablePricingRule
-];
+export const defaultPricingRules: PricingRule[] = [...bundledPricing, nonBillablePricingRule];
 
 const defaultSettings: AppSettings = {
   codexHome: "",
@@ -163,7 +156,6 @@ function filterDemo(data: OverviewData, filter: UsageFilter): OverviewData {
     (!filter.project || session.project === filter.project)
   );
   if (sessions.length === data.sessions.length) return data;
-  const sessionKeys = new Set(sessions.map((session) => `${session.sourceId}:${session.sessionId}`));
   const totals = sessions.reduce(
     (acc, session) => ({
       inputTokens: acc.inputTokens + session.tokens.inputTokens,
@@ -198,7 +190,7 @@ function filterDemo(data: OverviewData, filter: UsageFilter): OverviewData {
     model.tokens.totalTokens += session.tokens.totalTokens;
     model.sessions += 1;
     for (const turn of session.turns ?? []) {
-      if (turn.serviceTier === "priority") { model.fastRequests += 1; model.fastTokens += turn.tokens.totalTokens; }
+      if ((turn.serviceTier === "priority" || turn.serviceTier === "ultrafast")) { model.fastRequests += 1; model.fastTokens += turn.tokens.totalTokens; }
       if (!turn.reasoningEffort || turn.reasoningEffort === "unknown") model.unrecordedEffortRequests += 1;
       else {
         const effort = model.reasoningEfforts.find((item) => item.name === turn.reasoningEffort);
@@ -226,7 +218,7 @@ function filterDemo(data: OverviewData, filter: UsageFilter): OverviewData {
     totals,
     sources: data.sources.map((source) => ({
       ...source,
-      sessionCount: sessions.filter((session) => session.sourceId === source.id && sessionKeys.has(`${session.sourceId}:${session.sessionId}`)).length,
+      sessionCount: sessions.filter((session) => session.sourceId === source.id).length,
       latestDataAt: sessions
         .filter((session) => session.sourceId === source.id)
         .reduce<string | null>((latest, session) => !latest || session.endedAt > latest ? session.endedAt : latest, null)

@@ -13,7 +13,7 @@ pub fn apply_non_billable_pricing(rules: &mut Vec<PricingRule>) {
 
 pub fn validate_rule(rule: &PricingRule) -> Result<(), String> {
     let rates = [rule.input_usd_per_million, rule.cached_usd_per_million, rule.cache_write_usd_per_million,
-        rule.output_usd_per_million, rule.cache_write_multiplier, rule.priority_multiplier];
+        rule.output_usd_per_million, rule.cache_write_multiplier, rule.priority_multiplier, rule.ultrafast_multiplier.unwrap_or(0.0)];
     if rule.model.trim().is_empty() || rates.iter().any(|value| !value.is_finite() || *value < 0.0) {
         return Err("模型名稱不可空白，價格與倍率請填 0 或正數。".into());
     }
@@ -32,15 +32,15 @@ pub fn estimate_microusd(model: &str, tokens: &TokenBreakdown) -> Option<i64> {
 }
 
 pub fn is_fast_tier(service_tier: &str) -> bool {
-    matches!(service_tier.trim().to_ascii_lowercase().as_str(), "priority" | "fast")
+    matches!(service_tier.trim().to_ascii_lowercase().as_str(), "priority" | "fast" | "ultrafast")
 }
 
 #[cfg(test)]
 pub fn estimate_with_rules(model: &str, tokens: &TokenBreakdown, rules: &[PricingRule]) -> Option<i64> {
-    estimate_with_rules_for_tier(model, tokens, "default", rules)
+    estimate_with_rules_for_tier(model, tokens, "default", "", rules)
 }
 
-pub fn estimate_with_rules_for_tier(model: &str, tokens: &TokenBreakdown, service_tier: &str, rules: &[PricingRule]) -> Option<i64> {
+pub fn estimate_with_rules_for_tier(model: &str, tokens: &TokenBreakdown, service_tier: &str, timestamp: &str, rules: &[PricingRule]) -> Option<i64> {
     // Keep review usage recorded even when prices or token breakdowns are missing.
     if is_non_billable_model(model) { return Some(0); }
     if tokens.total_tokens > tokens.input_tokens + tokens.output_tokens {
@@ -60,11 +60,13 @@ pub fn estimate_with_rules_for_tier(model: &str, tokens: &TokenBreakdown, servic
     let cached = tokens.cached_input_tokens.max(0) as f64;
     let cache_write = tokens.cache_write_input_tokens.max(0) as f64;
     let long = tokens.input_tokens > rule.long_context_threshold;
+    let tier = service_tier.trim().to_ascii_lowercase();
+    let priority = matches!(tier.as_str(), "priority" | "fast");
     if rule.unavailable_rates.iter().any(|rate| match rate.as_str() {
         "cached" => tokens.cached_input_tokens > 0,
         "cacheWrite" => tokens.cache_write_input_tokens > 0,
-        "fast" => is_fast_tier(service_tier),
-        "longFast" => long && is_fast_tier(service_tier),
+        "fast" => priority,
+        "longFast" => long && priority,
         _ => false,
     }) { return None; }
     let input_multiplier = if long { rule.long_input_multiplier } else { 1.0 };
@@ -73,8 +75,15 @@ pub fn estimate_with_rules_for_tier(model: &str, tokens: &TokenBreakdown, servic
         + (cached * rule.cached_usd_per_million * input_multiplier)
         + (cache_write * rule.cache_write_usd_per_million * input_multiplier)
         + (tokens.output_tokens.max(0) as f64 * rule.output_usd_per_million * output_multiplier);
-    let priority_multiplier = if is_fast_tier(service_tier) { rule.priority_multiplier } else { 1.0 };
-    Some((micro * priority_multiplier).round() as i64)
+    let multiplier = if tier == "ultrafast" {
+        let list = rule.ultrafast_multiplier?;
+        if matches!(rule.model.trim().to_ascii_lowercase().as_str(), "gpt-6.2-astra" | "gpt-6.2-sol") {
+            let at = chrono::DateTime::parse_from_rfc3339(timestamp).ok()?;
+            // March 1, 2027 at midnight Pacific (08:00 UTC).
+            if at.timestamp() < 1_803_888_000 { 3.0 } else { list }
+        } else { list }
+    } else if priority { rule.priority_multiplier } else { 1.0 };
+    Some((micro * multiplier).round() as i64)
 }
 
 pub fn summarize_session_estimate(turns: &[crate::models::TurnUsage], session_total_tokens: i64) -> (Option<i64>, i64, i64) {
@@ -106,15 +115,13 @@ pub fn summarize_session_estimate(turns: &[crate::models::TurnUsage], session_to
     )
 }
 
-pub fn reprice_sessions(sessions: &mut [SessionAggregate], rules: &[PricingRule]) {
-    for session in sessions {
-        let Some(turns) = session.turns.as_mut() else { continue };
-        for turn in turns.iter_mut() { turn.estimate_microusd = estimate_with_rules_for_tier(&turn.model, &turn.tokens, &turn.service_tier, rules); }
-        let (estimate, unpriced_turn_count, unpriced_tokens) = summarize_session_estimate(turns, session.tokens.total_tokens);
-        session.estimate_microusd = estimate;
-        session.unpriced_turn_count = unpriced_turn_count;
-        session.unpriced_tokens = unpriced_tokens;
-    }
+pub fn reprice_session(session: &mut SessionAggregate, rules: &[PricingRule]) {
+    let Some(turns) = session.turns.as_mut() else { return };
+    for turn in turns.iter_mut() { turn.estimate_microusd = estimate_with_rules_for_tier(&turn.model, &turn.tokens, &turn.service_tier, &turn.timestamp, rules); }
+    let (estimate, unpriced_turn_count, unpriced_tokens) = summarize_session_estimate(turns, session.tokens.total_tokens);
+    session.estimate_microusd = estimate;
+    session.unpriced_turn_count = unpriced_turn_count;
+    session.unpriced_tokens = unpriced_tokens;
 }
 
 #[cfg(test)]
@@ -205,8 +212,8 @@ mod tests {
         for usage in [full, TokenBreakdown { total_tokens: 48_395, ..TokenBreakdown::default() }] {
             for model in ["codex-auto-review", " CODEX-AUTO-REVIEW "] {
                 for tier in ["default", "priority", "fast"] {
-                    assert_eq!(estimate_with_rules_for_tier(model, &usage, tier, &[]), Some(0));
-                    assert_eq!(estimate_with_rules_for_tier(model, &usage, tier, &[rule.clone()]), Some(0));
+                    assert_eq!(estimate_with_rules_for_tier(model, &usage, tier, "", &[]), Some(0));
+                    assert_eq!(estimate_with_rules_for_tier(model, &usage, tier, "", &[rule.clone()]), Some(0));
                 }
             }
         }
@@ -215,8 +222,8 @@ mod tests {
     #[test]
     fn priority_tier_uses_api_priority_multiplier() {
         let usage = TokenBreakdown { input_tokens: 100_000, cached_input_tokens: 80_000, cache_write_input_tokens: 0, output_tokens: 10_000, reasoning_output_tokens: 4_000, total_tokens: 110_000 };
-        assert_eq!(estimate_with_rules_for_tier("gpt-5.6-sol", &usage, "priority", &default_pricing_rules()), Some(624_000));
-        assert_eq!(estimate_with_rules_for_tier("gpt-5.6-sol", &usage, "default", &default_pricing_rules()), Some(312_000));
+        assert_eq!(estimate_with_rules_for_tier("gpt-5.6-sol", &usage, "priority", "", &default_pricing_rules()), Some(624_000));
+        assert_eq!(estimate_with_rules_for_tier("gpt-5.6-sol", &usage, "default", "", &default_pricing_rules()), Some(312_000));
     }
 
     #[test]

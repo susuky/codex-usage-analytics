@@ -71,6 +71,7 @@ fn backfill_leading_model(turns: &mut [TurnUsage], session_model: &str, pricing_
             &turn.model,
             &turn.tokens,
             &turn.service_tier,
+            &turn.timestamp,
             pricing_rules,
         );
     }
@@ -231,7 +232,7 @@ pub fn parse_session<R: BufRead>(reader: R, source_id: &str, source_name: &str, 
                         model: model.clone(),
                         service_tier: service_tier.clone(),
                         reasoning_effort: reasoning_effort.clone(),
-                        estimate_microusd: estimate_with_rules_for_tier(&model, &token_usage, &service_tier, &pricing_rules),
+                        estimate_microusd: estimate_with_rules_for_tier(&model, &token_usage, &service_tier, &timestamp, &pricing_rules),
                         tokens: token_usage,
                         cache_rate,
                     });

@@ -44,7 +44,7 @@ export function hasLongContextPricing(rule: PricingRule) {
 }
 
 export function samePrices(left: PricingRule, right: PricingRule) {
-  const fields = ["inputUsdPerMillion", "cachedUsdPerMillion", "cacheWriteUsdPerMillion", "outputUsdPerMillion", "cacheWriteMultiplier", "longContextThreshold", "longInputMultiplier", "longOutputMultiplier", "priorityMultiplier"] as const;
+  const fields = ["inputUsdPerMillion", "cachedUsdPerMillion", "cacheWriteUsdPerMillion", "outputUsdPerMillion", "cacheWriteMultiplier", "longContextThreshold", "longInputMultiplier", "longOutputMultiplier", "priorityMultiplier", "ultrafastMultiplier"] as const;
   return left.model.trim().toLowerCase() === right.model.trim().toLowerCase()
     && fields.every(field => left[field] === right[field])
     && JSON.stringify(left.unavailableRates ?? []) === JSON.stringify(right.unavailableRates ?? []);

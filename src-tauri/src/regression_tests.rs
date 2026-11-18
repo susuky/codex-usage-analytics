@@ -99,7 +99,7 @@ fn subagent_upgrade_reassigns_legacy_usage_without_loss_or_double_counting() {
     db::save_cloud_sessions(&mut connection, &[wrong_parent, wrong_child]).unwrap();
     assert_eq!(db::get_session(&connection,"local","child").unwrap().tokens.total_tokens, 330);
     assert_eq!(db::get_session(&connection,"local","parent").unwrap().tokens.total_tokens, 485);
-    assert!(crate::scanner::scan_local(&root, &mut connection, false).unwrap().sessions.is_empty());
+    assert_eq!(crate::scanner::scan_local(&root, &mut connection, false).unwrap().scanned_sessions, 0);
     crate::scanner::scan_local(&root, &mut connection, true).unwrap();
     assert_eq!(connection.query_row("SELECT SUM(total_tokens) FROM sessions", [], |r| r.get::<_,i64>(0)).unwrap(), 815);
     // An unmatched old observation must survive without blocking earlier own work.
@@ -148,7 +148,7 @@ fn incomplete_new_child_does_not_abort_other_local_imports() {
     let mut connection=db::open(&root.join("usage.sqlite3")).unwrap();
     let result=crate::scanner::scan_local(&root,&mut connection,false).unwrap();
     assert_eq!(result.skipped_files,1);
-    assert_eq!(result.sessions.len(),1);
+    assert_eq!(result.scanned_sessions,1);
     assert_eq!(db::get_session(&connection,"local","regression").unwrap().tokens.total_tokens,485);
     assert!(db::get_session(&connection,"local","child").is_err());
 }
@@ -233,9 +233,7 @@ fn daily_session_tokens_and_costs_match_overview_across_dates_models_and_sources
     let root = temp(); let path = root.join("usage.sqlite3");
     let mut connection = db::open(&path).unwrap();
     let mut settings = AppSettings::default();
-    let mut astra = settings.pricing_rules[0].clone();
-    astra.model = "gpt-6-astra".into(); astra.input_usd_per_million = 1.0;
-    settings.pricing_rules.push(astra);
+    settings.pricing_rules.iter_mut().find(|rule| rule.model == "gpt-6-astra").unwrap().input_usd_per_million = 1.0;
     db::save_settings(&connection, &settings).unwrap();
     let midnight = Local.from_local_datetime(&NaiveDate::from_ymd_opt(2026, 9, 6).unwrap().and_hms_opt(0, 0, 0).unwrap()).earliest().unwrap();
     let timestamp = |seconds| (midnight + chrono::Duration::seconds(seconds)).with_timezone(&Utc).to_rfc3339_opts(SecondsFormat::Millis, true);
@@ -544,7 +542,7 @@ fn effort_settings_fixture() -> String {
     let settings = [
         None,
         Some(json!({"type":"turn_context","payload":{"model":"gpt-5.6-sol","collaboration_mode":{"settings":{"reasoning_effort":" high "}}}})),
-        Some(json!({"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"reasoning_effort":"max"}}})),
+        Some(json!({"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"reasoning_effort":"max","service_tier":"ultrafast"}}})),
         Some(json!({"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"reasoning_effort":null,"collaboration_mode":{"settings":{"reasoning_effort":"ultra"}}}}})),
         Some(json!({"type":"turn_context","payload":{"effort":" xhigh ","reasoning_effort":"low","collaboration_mode":{"settings":{"reasoning_effort":"medium"}}}})),
         Some(json!({"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"priority","collaboration_mode":"legacy"}}})),
@@ -574,6 +572,8 @@ fn recorded_effort_aliases_and_setting_switches_match_all_scanners() {
         results.push(serde_json::from_str::<SessionAggregate>(String::from_utf8_lossy(&output.stdout).lines().next().unwrap()).unwrap());
     }
     for parsed in &results {
+        let tiers: Vec<_> = parsed.turns.as_ref().unwrap().iter().map(|turn| turn.service_tier.as_str()).collect();
+        assert_eq!(tiers, ["default", "default", "ultrafast", "ultrafast", "ultrafast", "priority", "priority"]);
         assert_eq!(parsed.tokens.total_tokens,700);
         assert_eq!(parsed.turns.as_ref().unwrap().iter().map(|turn| turn.reasoning_effort.as_str()).collect::<Vec<_>>(),["unknown","high","max","ultra","xhigh","xhigh","medium"]);
         assert_eq!(parsed.activity.efforts.iter().map(|item| (&item.name,item.count)).collect::<Vec<_>>(),results[0].activity.efforts.iter().map(|item| (&item.name,item.count)).collect::<Vec<_>>());
@@ -615,11 +615,11 @@ fn effort_parser_upgrade_reparses_checkpointed_logs() {
     std::fs::write(root.join("sessions/efforts.jsonl"),effort_settings_fixture()).unwrap();
     let mut connection=db::open(&path).unwrap();
     crate::scanner::scan_local(&root,&mut connection,false).unwrap();
-    assert!(crate::scanner::scan_local(&root,&mut connection,false).unwrap().sessions.is_empty());
+    assert_eq!(crate::scanner::scan_local(&root,&mut connection,false).unwrap().scanned_sessions, 0);
     connection.execute("DELETE FROM settings WHERE key='data_revision:reasoning-effort-v1'",[]).unwrap(); drop(connection);
     let mut connection=db::open(&path).unwrap();
-    assert_eq!(crate::scanner::scan_local(&root,&mut connection,false).unwrap().sessions.len(),1);
-    assert!(crate::scanner::scan_local(&root,&mut connection,false).unwrap().sessions.is_empty());
+    assert_eq!(crate::scanner::scan_local(&root,&mut connection,false).unwrap().scanned_sessions,1);
+    assert_eq!(crate::scanner::scan_local(&root,&mut connection,false).unwrap().scanned_sessions, 0);
 }
 
 #[test]
@@ -653,20 +653,21 @@ fn model_parser_upgrade_reparses_unchanged_logs_without_losing_usage() {
     std::fs::create_dir(root.join("sessions")).unwrap();
     std::fs::write(root.join("sessions/model.jsonl"), model_switch_fixture()).unwrap();
     let mut connection = db::open(&path).unwrap();
-    let mut original = crate::scanner::scan_local(&root, &mut connection, false).unwrap().sessions.remove(0);
+    crate::scanner::scan_local(&root, &mut connection, false).unwrap();
+    let mut original = db::get_session(&connection, "local", "switch-model").unwrap();
     for turn in original.turns.as_mut().unwrap() { turn.model = "gpt-6.1-sol".into(); }
     db::save_sessions(&mut connection, &[original]).unwrap();
-    assert!(crate::scanner::scan_local(&root, &mut connection, false).unwrap().sessions.is_empty());
+    assert_eq!(crate::scanner::scan_local(&root, &mut connection, false).unwrap().scanned_sessions, 0);
     connection.execute("DELETE FROM settings WHERE key='data_revision:thread-settings-model-v1'", []).unwrap();
     drop(connection);
     let mut connection = db::open(&path).unwrap();
     let scanned = crate::scanner::scan_local(&root, &mut connection, false).unwrap();
-    assert_eq!(scanned.sessions.len(), 1);
+    assert_eq!(scanned.scanned_sessions, 1);
     assert_eq!(scanned.skipped_files, 0);
     let saved = db::get_session(&connection, "local", "switch-model").unwrap();
     assert_eq!(saved.tokens.total_tokens, 300);
     assert_eq!(saved.turns.unwrap().iter().map(|turn| turn.model.as_str()).collect::<Vec<_>>(), vec!["gpt-6-astra", "codex-auto-review"]);
-    assert!(crate::scanner::scan_local(&root, &mut connection, false).unwrap().sessions.is_empty());
+    assert_eq!(crate::scanner::scan_local(&root, &mut connection, false).unwrap().scanned_sessions, 0);
 }
 
 #[test]
@@ -691,7 +692,7 @@ fn retained_local_history_is_checkpointed_without_hiding_unreadable_logs() {
     assert_eq!(saved.tokens, original.tokens);
     assert_eq!(saved.estimate_microusd, original.estimate_microusd);
     assert_eq!(serde_json::to_value(saved.turns).unwrap(), serde_json::to_value(&original.turns).unwrap());
-    assert!(crate::scanner::scan_local(&root, &mut connection, false).unwrap().sessions.is_empty());
+    assert_eq!(crate::scanner::scan_local(&root, &mut connection, false).unwrap().scanned_sessions, 0);
     std::fs::write(&log_path, compacted + "{broken\n").unwrap();
     for _ in 0..2 {
         let scan = crate::scanner::scan_local(&root, &mut connection, false).unwrap();
@@ -946,7 +947,7 @@ fn cloud_download_preserves_local_and_ssh_activity_when_unchanged_logs_are_skipp
             assert_eq!(activity_rows(&connection), activity);
         }
         if kind == "local" {
-            assert!(crate::scanner::scan_local(&root, &mut connection, false).unwrap().sessions.is_empty());
+            assert_eq!(crate::scanner::scan_local(&root, &mut connection, false).unwrap().scanned_sessions, 0);
             assert_eq!(activity_rows(&connection), activity);
         }
         // An authoritative log scan may still remove activity that no longer exists.

@@ -1,14 +1,40 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { DesktopSettings } from "./DesktopSettings";
-import { getDesktopPreferences, saveDesktopPreferences } from "../lib/desktop";
+import { getDesktopPreferences, portableUpdateSupported, saveDesktopPreferences, updatePortableApp } from "../lib/desktop";
 
-vi.mock("../lib/desktop", () => ({ getDesktopPreferences: vi.fn(), saveDesktopPreferences: vi.fn() }));
-afterEach(cleanup);
+vi.mock("../lib/desktop", () => ({ getDesktopPreferences: vi.fn(), saveDesktopPreferences: vi.fn(), portableUpdateSupported: vi.fn(), updatePortableApp: vi.fn() }));
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(getDesktopPreferences).mockResolvedValue({ launchAtStartup: false, closeToTray: true });
   vi.mocked(saveDesktopPreferences).mockImplementation(async preferences => preferences);
+  vi.mocked(portableUpdateSupported).mockReturnValue(false);
+});
+
+it("selects an update and starts it only after confirmation", async () => {
+  vi.mocked(portableUpdateSupported).mockReturnValue(true);
+  vi.mocked(updatePortableApp).mockResolvedValue();
+  const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+  render(<DesktopSettings />);
+  const button = await screen.findByRole("button", { name: "選擇更新檔" });
+  fireEvent.click(button);
+  await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+  expect(updatePortableApp).not.toHaveBeenCalled();
+  await waitFor(() => expect(button).toBeEnabled());
+  fireEvent.click(button);
+  await waitFor(() => expect(updatePortableApp).toHaveBeenCalledTimes(1));
+  confirm.mockRestore();
+});
+
+it("reports update errors and allows retry", async () => {
+  vi.mocked(portableUpdateSupported).mockReturnValue(true);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  vi.mocked(updatePortableApp).mockRejectedValueOnce(new Error("無法讀取更新檔，請重試。"));
+  render(<DesktopSettings />);
+  fireEvent.click(await screen.findByRole("button", { name: "選擇更新檔" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("無法讀取更新檔，請重試。");
+  expect(screen.getByRole("button", { name: "選擇更新檔" })).toBeEnabled();
 });
 
 it("saves startup and background preferences independently and uses the confirmed native state", async () => {
