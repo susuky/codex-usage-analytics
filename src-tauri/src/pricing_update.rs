@@ -61,13 +61,15 @@ fn find_rule<'a>(rules: &'a [PricingRule], model: &str) -> Option<&'a PricingRul
     rules.iter().find(|rule| rule.model.trim().eq_ignore_ascii_case(model.trim()))
 }
 
-/// Three-way merge: only replace values that still match the previous catalog.
+/// Replace unchanged official prices, including bundled prices omitted by an older feed.
 pub fn merge_official(current: &[PricingRule], previous: &[PricingRule], next: &[PricingRule]) -> Vec<PricingRule> {
     let mut result = current.to_vec();
+    let bundled = default_pricing_rules();
     for rule in next {
         if is_non_billable_model(&rule.model) { continue; }
+        let baseline = find_rule(previous, &rule.model).or_else(|| find_rule(&bundled, &rule.model));
         match result.iter_mut().find(|item| item.model.trim().eq_ignore_ascii_case(&rule.model)) {
-            Some(item) if find_rule(previous, &item.model).is_some_and(|old| same_prices(item, old)) => *item = rule.clone(),
+            Some(item) if baseline.is_some_and(|old| same_prices(item, old)) => *item = rule.clone(),
             Some(_) => {},
             None => result.push(rule.clone()),
         }
@@ -172,10 +174,10 @@ pub fn parse_official(document: &str, reviewed_at: &str) -> Result<Vec<PricingRu
             "Flagship models" => { family = "flagship"; tier = ""; },
             "Specialized models" => { family = "specialized"; tier = ""; },
             "Cyber models" | "Multimodal models" | "Finetuning" => { family = ""; tier = ""; },
-            "Standard" => tier = "standard",
-            "Batch" | "Flex" | "Ultrafast promotion pricing data" => tier = "skip",
-            "Ultrafast" | "Ultrafast mode" | "Ultrafast list pricing data" => tier = "ultrafast",
-            "Fast" | "Fast mode" => tier = "fast",
+            "Standard" | "Standard pricing data" => tier = "standard",
+            "Batch" | "Batch pricing data" | "Flex" | "Flex pricing data" | "Ultrafast promotion pricing data" => tier = "skip",
+            "Ultrafast" | "Ultrafast mode" | "Ultrafast pricing data" | "Ultrafast list pricing data" => tier = "ultrafast",
+            "Fast" | "Fast mode" | "Fast pricing data" => tier = "fast",
             _ => {},
         }
         if !line.starts_with('|') { columns = 0; continue; }
@@ -402,6 +404,19 @@ mod tests {
         let merged = merge_official(&current, &current, &next);
         assert_eq!(find_rule(&merged, "codex-auto-review"), find_rule(&current, "codex-auto-review"));
         assert!(find_rule(&PricingStatus::default().official_rules, "codex-auto-review").is_none());
+    }
+
+    #[test]
+    fn refreshes_bundled_prices_skipped_by_an_older_catalog() {
+        let astra = "gpt-6.2-astra";
+        let sol = "gpt-6.2-sol";
+        let mut current = default_pricing_rules();
+        let previous: Vec<_> = current.iter().filter(|rule| rule.model != astra && rule.model != sol).cloned().collect();
+        current.iter_mut().find(|rule| rule.model == sol).unwrap().output_usd_per_million = 12.0;
+        let next = parse_official(CURRENT_FEED, "2026-11-19").unwrap();
+        let merged = merge_official(&current, &previous, &next);
+        assert_eq!(find_rule(&merged, astra), find_rule(&next, astra));
+        assert_eq!(find_rule(&merged, sol), find_rule(&current, sol));
     }
 
     #[test]

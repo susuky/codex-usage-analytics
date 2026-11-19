@@ -4,8 +4,6 @@
 
 Flagship models
 
-Standard
-
 ### Standard pricing data
 
 | Model | Short context input | Short context output | Short context cached input | Short context 30m write | Short context 12h write | Long context input | Long context output | Long context cached input | Long context 30m write | Long context 12h write |
@@ -23,8 +21,6 @@ Standard
 | gpt-5.4-mini | $0.75 | $4.50 | $0.075 |
 | gpt-5.2-pro | $21.00 | $168.00 | - |
 
-Batch
-
 ### Batch pricing data
 
 | Model | Short context input | Short context output | Short context cached input | Short context 30m write | Short context 12h write | Long context input | Long context output | Long context cached input | Long context 30m write | Long context 12h write |
@@ -36,8 +32,6 @@ Batch
 | Model | Input | Output | Cached input |
 | --- | --- | --- | --- |
 | gpt-5.4-mini | $0.375 | $2.25 | $0.0375 |
-
-Fast
 
 ### Fast pricing data
 
@@ -54,8 +48,6 @@ Fast
 | Model | Input | Output | Cached input |
 | --- | --- | --- | --- |
 | gpt-5.4-mini | $1.50 | $9.00 | $0.15 |
-
-Ultrafast
 
 ### Ultrafast pricing data
 | Model | Short context input | Short context output | Short context cached input | Short context 30m write | Short context 12h write | Long context input | Long context output | Long context cached input | Long context 30m write | Long context 12h write |

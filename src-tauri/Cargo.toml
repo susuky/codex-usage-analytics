@@ -1,6 +1,6 @@
 [package]
 name = "codex-usage-analytics"
-version = "0.3.24"
+version = "0.3.25"
 description = "Local-first Codex token usage analytics"
 authors = ["Codex Usage Analytics contributors"]
 edition = "2021"

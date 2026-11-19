@@ -29,7 +29,7 @@ if(process.argv[3]) {
 const db=new DatabaseSync(path);
 const originalTurns=process.argv[3]?db.prepare('select count(*) n from turns').get().n:0;
 db.exec('create table if not exists settings(key text primary key,value text not null)');
-db.prepare('insert into settings values(?,?) on conflict(key) do update set value=excluded.value').run('app',JSON.stringify({codexHome:join(root,'codex'),sshTarget:'',sshEnabled:false,sshSources:[],pollMinutes:15}));
+db.prepare('insert into settings values(?,?) on conflict(key) do update set value=excluded.value').run('app',JSON.stringify({codexHome:join(root,'codex'),sshTarget:'',sshEnabled:false,sshSources:[],pollMinutes:15,autoUpdatePricing:false}));
 db.close();
 const socket=createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;await new Promise(r=>socket.close(r));
 const softwareRendering=process.env.CODEX_USAGE_SMOKE_SOFTWARE==='1';
@@ -114,6 +114,7 @@ try {
   await page.getByLabel('gpt-5.6-sol 長 context 門檻',{exact:true}).fill('272000');
   await page.getByRole('button',{name:'保存價格',exact:true}).click();
   await expect(page.getByText('gpt-5.6-sol 的價格已保存。',{exact:true})).toBeVisible();
+  const beforeRefresh=await page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('get_pricing_status'));
   await page.getByRole('button',{name:'更新官方價格',exact:true}).click();
   await expect(page.getByText('官方價格已更新，自訂價格已保留。',{exact:true})).toBeVisible({timeout:40_000});
   await page.getByRole('button',{name:'編輯 gpt-5.6-sol 價格',exact:true}).click();
@@ -122,14 +123,33 @@ try {
   await page.getByLabel('搜尋模型價格').fill('gpt-6-astra');
   await page.getByRole('button',{name:'編輯 gpt-6-astra 價格',exact:true}).click();
   const official=await page.evaluate(async()=>window.__TAURI_INTERNALS__.invoke('get_pricing_status'));
-  if(!official.updatedAt || official.lastError) throw new Error('Live official pricing did not update');
+  if(!official.updatedAt || official.updatedAt===beforeRefresh.updatedAt || official.lastError) throw new Error('Live official pricing did not update');
   const latestSol=official.officialRules.find(rule=>rule.model==='gpt-6.1-sol');
   if(!latestSol || latestSol.longContextThreshold!==272000 || latestSol.longInputMultiplier!==2 || latestSol.longOutputMultiplier!==1.5) throw new Error('Current official long-context rule was not imported');
   await expect(page.getByLabel('gpt-6-astra input 價格')).toHaveValue(String(official.officialRules.find(rule=>rule.model==='gpt-6-astra').inputUsdPerMillion));
   await page.screenshot({path:join(root,'native-official-pricing.png')});
   await page.getByRole('button',{name:'取消',exact:true}).click();
-  await page.getByLabel('搜尋模型價格').fill('');
   const savedCatalog=await page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('get_settings'));
+  const refreshedModels = ['gpt-6.2-astra', 'gpt-6.2-sol'].map(model => {
+    const rate = official.officialRules.find(rule => rule.model === model);
+    const saved = savedCatalog.pricingRules.find(rule => rule.model === model);
+    if (!rate || rate.sourceUrl !== 'https://developers.openai.com/api/docs/pricing' || JSON.stringify(saved) !== JSON.stringify(rate) || !rate.ultrafastMultiplier) {
+      throw new Error(`Live official pricing was not saved for ${model}`);
+    }
+    return rate;
+  });
+  await page.getByLabel('搜尋模型價格').fill('gpt-6.2');
+  for (const rate of refreshedModels) {
+    const row = page.getByRole('row').filter({ has: page.getByText(rate.model,{exact:true}) });
+    await expect(row.locator('[data-label="輸入"]')).toHaveText(String(rate.inputUsdPerMillion));
+    await expect(row.locator('[data-label="快取輸入"]')).toHaveText(String(rate.cachedUsdPerMillion));
+    await expect(row.locator('[data-label="輸出"]')).toHaveText(String(rate.outputUsdPerMillion));
+    await expect(row.getByText('自訂',{exact:true})).toHaveCount(0);
+  }
+  await page.getByRole('link',{name:'模型價格',exact:true}).click();
+  await page.screenshot({path:join(root,'native-gpt-6.2-pricing.png')});
+  console.log(JSON.stringify({checkedAt:official.updatedAt,refreshedModels}));
+  await page.getByLabel('搜尋模型價格').fill('');
   await expect(page.locator('.pricing-table tbody tr')).toHaveCount(savedCatalog.pricingRules.length);
   const names=await page.locator('.pricing-model-name').allTextContents();
   if(JSON.stringify(names)!==JSON.stringify([...names].sort((a,b)=>a.localeCompare(b,'en',{numeric:true,sensitivity:'base'})))) throw new Error('Native model name sorting failed');
